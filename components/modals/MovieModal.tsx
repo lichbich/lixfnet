@@ -12,12 +12,22 @@ import {
   Tv,
   Loader2,
   Layers,
+  ChevronDown,
 } from 'lucide-react';
 import { RatingBadge, QualityBadge } from '@/components/ui/Badge';
 import { useNetflix } from '@/context/NetflixContext';
 import { getSimilarMovies } from '@/services/movieApi';
 import { getMovieCollection, MovieCollection } from '@/services/collectionService';
 import { Movie } from '@/types';
+
+/** Cleanly format episode titles, e.g. "4" -> "Tập 4", "Tập 4" -> "Tập 4", "Full" -> "Bản Full" */
+function formatEpisodeLabel(rawName: string): string {
+  const clean = (rawName || '').trim();
+  if (!clean) return 'Tập 1';
+  if (/^tập/i.test(clean)) return clean;
+  if (/^full$/i.test(clean)) return 'Bản Full';
+  return `Tập ${clean}`;
+}
 
 export const MovieModal: React.FC = () => {
   const {
@@ -42,6 +52,9 @@ export const MovieModal: React.FC = () => {
   const [collection, setCollection] = useState<MovieCollection | null>(null);
   const [isLoadingCollection, setIsLoadingCollection] = useState(false);
   const [episodeRangeIndex, setEpisodeRangeIndex] = useState<number | 'all'>(0);
+  const [isRangeDropdownOpen, setIsRangeDropdownOpen] = useState(false);
+  const rangeDropdownRef = useRef<HTMLDivElement>(null);
+  const dropdownMenuRef = useRef<HTMLDivElement>(null);
 
   // Smooth enter & exit animation state
   const [displayedMovie, setDisplayedMovie] = useState<Movie | null>(selectedMovie);
@@ -403,6 +416,49 @@ export const MovieModal: React.FC = () => {
     }
   }, [displayedMovie?.id, displayedMovie?.slug, displayedMovie?.episodesServers, activeServerIndex, getWatchProgress]);
 
+  // Click outside to close range dropdown
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (rangeDropdownRef.current && !rangeDropdownRef.current.contains(event.target as Node)) {
+        setIsRangeDropdownOpen(false);
+      }
+    };
+    if (isRangeDropdownOpen) {
+      document.addEventListener('mousedown', handleClickOutside);
+      return () => document.removeEventListener('mousedown', handleClickOutside);
+    }
+  }, [isRangeDropdownOpen]);
+
+  // Isolate mouse-wheel scrolling inside dropdown and completely block propagation/chaining to modal body & page
+  useEffect(() => {
+    const el = dropdownMenuRef.current;
+    if (!el || !isRangeDropdownOpen) return;
+
+    const onWheel = (e: WheelEvent) => {
+      e.stopPropagation();
+
+      const { scrollTop, scrollHeight, clientHeight } = el;
+      const isScrollingUp = e.deltaY < 0;
+      const isScrollingDown = e.deltaY > 0;
+
+      // When reaching top edge or bottom edge, block default so modal/page does not scroll
+      if (
+        (isScrollingUp && scrollTop <= 0) ||
+        (isScrollingDown && scrollTop + clientHeight >= scrollHeight - 1)
+      ) {
+        e.preventDefault();
+        return;
+      }
+
+      // Smoothly apply scroll inside dropdown without bubbling to parent
+      el.scrollTop += e.deltaY;
+      e.preventDefault();
+    };
+
+    el.addEventListener('wheel', onWheel, { passive: false });
+    return () => el.removeEventListener('wheel', onWheel);
+  }, [isRangeDropdownOpen]);
+
   if (!displayedMovie) return null;
 
   const movie = displayedMovie;
@@ -432,6 +488,24 @@ export const MovieModal: React.FC = () => {
           (episodeRangeIndex as number) * CHUNK_SIZE,
           ((episodeRangeIndex as number) + 1) * CHUNK_SIZE
         );
+
+  const currentRangeLabel =
+    episodeRangeIndex === 'all'
+      ? `Tất cả (${allEpisodes.length} tập)`
+      : `Tập ${Number(episodeRangeIndex) * CHUNK_SIZE + 1} - ${Math.min((Number(episodeRangeIndex) + 1) * CHUNK_SIZE, allEpisodes.length)}`;
+
+  const watchingChunkIndex = (() => {
+    if (!watchProgress?.episodeTitle || allEpisodes.length === 0) return -1;
+    const currentEpIndex = allEpisodes.findIndex((ep) => {
+      return (
+        watchProgress.episodeTitle === `Tập ${ep.name}` ||
+        watchProgress.episodeTitle === ep.name ||
+        watchProgress.episodeTitle?.endsWith(` ${ep.name}`) ||
+        watchProgress.episodeTitle?.includes(`Tập ${ep.name} `)
+      );
+    });
+    return currentEpIndex >= 0 ? Math.floor(currentEpIndex / CHUNK_SIZE) : -1;
+  })();
 
   const hasApiEpisodes = Boolean(movie.episodesServers && movie.episodesServers.length > 0);
   const isExpectedSeriesOrEpisodes =
@@ -747,19 +821,22 @@ export const MovieModal: React.FC = () => {
                 {Array.from({ length: 10 }).map((_, i) => (
                   <div
                     key={i}
-                    className="relative flex flex-col justify-between p-3.5 rounded-xl border border-white/5 bg-zinc-900/50 overflow-hidden min-h-[96px]"
+                    className="relative flex flex-col justify-between p-3.5 rounded-xl border border-white/5 bg-zinc-900/50 overflow-hidden min-h-[104px]"
                   >
                     {/* Netflix Shimmer Sweep */}
                     <div className="absolute inset-0 -translate-x-full animate-netflix-shimmer bg-gradient-to-r from-transparent via-white/[0.08] to-transparent pointer-events-none" />
 
                     {/* Top row */}
-                    <div className="flex items-center justify-between w-full mb-2">
-                      <div className="h-4 w-14 bg-zinc-800/90 rounded-md animate-pulse" />
+                    <div className="flex items-center justify-between w-full mb-1.5">
+                      <div className="h-5 w-16 bg-zinc-800/90 rounded-md animate-pulse" />
                       <div className="w-6 h-6 rounded-full bg-zinc-800/60 animate-pulse" />
                     </div>
 
-                    {/* Duration / Subtitle */}
-                    <div className="h-3 w-16 bg-zinc-800/50 rounded animate-pulse mb-3" />
+                    {/* Middle Info: Duration / Status */}
+                    <div className="flex items-center justify-between w-full mb-2">
+                      <div className="h-3 w-14 bg-zinc-800/50 rounded animate-pulse" />
+                      <div className="h-3 w-10 bg-zinc-800/40 rounded animate-pulse" />
+                    </div>
 
                     {/* Bottom Progress Bar Skeleton */}
                     <div className="w-full mt-auto space-y-1.5">
@@ -823,38 +900,98 @@ export const MovieModal: React.FC = () => {
                 )}
               </div>
 
-              {/* Episode Range Tabs (for series with > 25 episodes) */}
+              {/* Episode Range Dropdown Selector (Clean & Minimal - Netflix Style) */}
               {allEpisodes.length > CHUNK_SIZE && (
-                <div className="flex items-center gap-2 overflow-x-auto pb-2 mb-4 no-scrollbar">
-                  <span className="text-xs text-zinc-400 font-medium shrink-0">Khoảng tập:</span>
-                  {Array.from({ length: totalEpisodeChunks }).map((_, chunkIdx) => {
-                    const startEp = chunkIdx * CHUNK_SIZE + 1;
-                    const endEp = Math.min((chunkIdx + 1) * CHUNK_SIZE, allEpisodes.length);
-                    const isSelected = episodeRangeIndex === chunkIdx;
-                    return (
-                      <button
-                        key={chunkIdx}
-                        onClick={() => setEpisodeRangeIndex(chunkIdx)}
-                        className={`text-xs px-3 py-1 rounded-full font-medium shrink-0 transition-all ${
-                          isSelected
-                            ? 'bg-white text-black font-bold shadow-sm'
-                            : 'bg-zinc-800/80 text-zinc-400 hover:text-white hover:bg-zinc-700/80 border border-white/5'
+                <div className="mb-4 flex items-center justify-between">
+                  <div className="relative inline-block" ref={rangeDropdownRef}>
+                    <button
+                      type="button"
+                      onClick={() => setIsRangeDropdownOpen((prev) => !prev)}
+                      className="flex items-center gap-2.5 px-3.5 py-2 rounded-xl text-xs font-bold text-white bg-zinc-800/90 hover:bg-zinc-700/90 border border-white/10 shadow-md transition-all cursor-pointer active:scale-95 group"
+                    >
+                      <span className="text-zinc-400 font-normal">Khoảng tập:</span>
+                      <span className="text-white font-bold group-hover:text-red-400 transition-colors">
+                        {currentRangeLabel}
+                      </span>
+                      <ChevronDown
+                        className={`w-3.5 h-3.5 text-zinc-400 group-hover:text-white transition-transform duration-200 ${
+                          isRangeDropdownOpen ? 'rotate-180 text-white' : ''
                         }`}
+                      />
+                    </button>
+
+                    {/* Floating Dropdown Menu with wheel scroll-isolation */}
+                    {isRangeDropdownOpen && (
+                      <div
+                        ref={dropdownMenuRef}
+                        className="absolute left-0 top-full mt-2 w-64 max-h-72 overflow-y-auto overscroll-contain bg-[#181818]/98 backdrop-blur-2xl border border-zinc-700/80 rounded-xl shadow-[0_20px_50px_rgba(0,0,0,0.9)] p-1.5 z-50 animate-in fade-in zoom-in-95 duration-150"
                       >
-                        Tập {startEp} - {endEp}
-                      </button>
-                    );
-                  })}
-                  <button
-                    onClick={() => setEpisodeRangeIndex('all')}
-                    className={`text-xs px-3 py-1 rounded-full font-medium shrink-0 transition-all ${
-                      episodeRangeIndex === 'all'
-                        ? 'bg-white text-black font-bold shadow-sm'
-                        : 'bg-zinc-800/80 text-zinc-400 hover:text-white hover:bg-zinc-700/80 border border-white/5'
-                    }`}
-                  >
-                    Tất cả ({allEpisodes.length})
-                  </button>
+                        <div className="px-2.5 py-1.5 text-[11px] font-semibold text-zinc-400 uppercase tracking-wider border-b border-zinc-800/80 mb-1 flex items-center justify-between select-none">
+                          <span>Chọn khoảng tập</span>
+                          <span className="text-[10px] text-zinc-500 font-normal">{totalEpisodeChunks} phần</span>
+                        </div>
+                        <div className="space-y-0.5">
+                          {Array.from({ length: totalEpisodeChunks }).map((_, chunkIdx) => {
+                            const startEp = chunkIdx * CHUNK_SIZE + 1;
+                            const endEp = Math.min((chunkIdx + 1) * CHUNK_SIZE, allEpisodes.length);
+                            const isSelected = episodeRangeIndex === chunkIdx;
+                            const hasWatchingInChunk = watchingChunkIndex === chunkIdx;
+
+                            return (
+                              <button
+                                key={chunkIdx}
+                                type="button"
+                                onClick={() => {
+                                  setEpisodeRangeIndex(chunkIdx);
+                                  setIsRangeDropdownOpen(false);
+                                }}
+                                className={`w-full flex items-center justify-between px-3 py-2 rounded-lg text-xs font-medium transition-colors text-left cursor-pointer ${
+                                  isSelected
+                                    ? 'bg-red-600 text-white font-bold shadow-md shadow-red-600/30'
+                                    : 'text-zinc-300 hover:text-white hover:bg-zinc-800/90'
+                                }`}
+                              >
+                                <span className="flex items-center gap-1.5">
+                                  {isSelected && <span className="w-1.5 h-1.5 rounded-full bg-white animate-pulse" />}
+                                  Tập {startEp} - {endEp}
+                                </span>
+                                {hasWatchingInChunk && (
+                                  <span
+                                    className={`text-[10px] px-1.5 py-0.5 rounded-full font-semibold ${
+                                      isSelected
+                                        ? 'bg-black/30 text-white'
+                                        : 'bg-red-950/70 text-red-400 border border-red-500/30'
+                                    }`}
+                                  >
+                                    Đang xem
+                                  </span>
+                                )}
+                              </button>
+                            );
+                          })}
+
+                          <div className="border-t border-zinc-800/80 my-1" />
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setEpisodeRangeIndex('all');
+                              setIsRangeDropdownOpen(false);
+                            }}
+                            className={`w-full flex items-center justify-between px-3 py-2 rounded-lg text-xs font-medium transition-colors text-left cursor-pointer ${
+                              episodeRangeIndex === 'all'
+                                ? 'bg-red-600 text-white font-bold shadow-md shadow-red-600/30'
+                                : 'text-zinc-300 hover:text-white hover:bg-zinc-800/90'
+                            }`}
+                          >
+                            <span className="flex items-center gap-1.5">
+                              {episodeRangeIndex === 'all' && <span className="w-1.5 h-1.5 rounded-full bg-white animate-pulse" />}
+                              Tất cả ({allEpisodes.length} tập)
+                            </span>
+                          </button>
+                        </div>
+                      </div>
+                    )}
+                  </div>
                 </div>
               )}
 
@@ -878,7 +1015,7 @@ export const MovieModal: React.FC = () => {
                         handleClose();
                         startPlaying(movie, ep.embed, `Tập ${ep.name}`);
                       }}
-                      className={`relative flex flex-col justify-between p-3.5 rounded-xl transition-all duration-200 text-left group border min-h-[96px] ${
+                      className={`relative flex flex-col justify-between p-3.5 rounded-xl transition-all duration-200 text-left group border min-h-[104px] cursor-pointer ${
                         isCurrent
                           ? 'bg-gradient-to-br from-red-950/40 via-zinc-900 to-zinc-900 border-red-500 shadow-[0_0_20px_rgba(229,9,20,0.25)] ring-1 ring-red-500/70 scale-[1.01]'
                           : isCompleted
@@ -886,25 +1023,23 @@ export const MovieModal: React.FC = () => {
                           : 'bg-zinc-900/40 border-white/5 hover:border-white/20 hover:bg-zinc-800/70 hover:-translate-y-0.5'
                       }`}
                     >
-                      {/* Top Row: Single Clean Episode Title & Status Badge */}
-                      <div className="flex items-center justify-between gap-2 w-full">
-                        <div className="flex items-center gap-1.5 min-w-0">
-                          <span className="text-sm font-bold text-white truncate tracking-tight group-hover:text-red-400 transition-colors">
-                            Tập {ep.name}
+                      {/* Top Row: Prominent Episode Title & Circular Action Icon (Episode Title is NEVER truncated) */}
+                      <div className="flex items-center justify-between gap-1.5 w-full">
+                        <div className="flex items-baseline gap-1.5 min-w-0 pr-1">
+                          <span className="text-sm sm:text-base font-extrabold text-white tracking-tight whitespace-nowrap group-hover:text-red-400 transition-colors">
+                            {formatEpisodeLabel(ep.name)}
                           </span>
                         </div>
 
-                        {/* Status Badge */}
+                        {/* Circular Action / Status Indicator */}
                         {isCurrent ? (
-                          <span className="shrink-0 inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-bold tracking-wide uppercase bg-red-600 text-white shadow-[0_0_12px_rgba(229,9,20,0.6)] border border-red-400/40 whitespace-nowrap">
-                            <span className="w-1.5 h-1.5 rounded-full bg-white animate-pulse" />
-                            Đang xem
-                          </span>
+                          <div className="shrink-0 w-6 h-6 rounded-full bg-red-600 text-white flex items-center justify-center shadow-[0_0_10px_rgba(229,9,20,0.7)]">
+                            <Play className="w-2.5 h-2.5 fill-current ml-0.5" />
+                          </div>
                         ) : isCompleted ? (
-                          <span className="shrink-0 inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-medium text-emerald-400 bg-emerald-950/40 border border-emerald-500/20 whitespace-nowrap">
-                            <Check className="w-2.5 h-2.5 stroke-[2.5]" />
-                            Đã xem
-                          </span>
+                          <div className="shrink-0 w-6 h-6 rounded-full bg-emerald-950/70 border border-emerald-500/30 text-emerald-400 flex items-center justify-center shadow-sm">
+                            <Check className="w-3 h-3 stroke-[2.5]" />
+                          </div>
                         ) : (
                           <div className="shrink-0 w-6 h-6 rounded-full bg-white/5 border border-white/10 flex items-center justify-center text-zinc-400 group-hover:bg-red-600 group-hover:text-white group-hover:border-red-600 group-hover:scale-105 transition-all duration-200">
                             <Play className="w-2.5 h-2.5 fill-current ml-0.5" />
@@ -912,16 +1047,23 @@ export const MovieModal: React.FC = () => {
                         )}
                       </div>
 
-                      {/* Middle Info: Duration / Status */}
-                      <div className="flex items-center justify-between text-xs text-zinc-400 font-normal mt-1 mb-2.5">
-                        <span className="truncate">{epDurationLabel}</span>
+                      {/* Middle Info: Duration & Status Badge (Spacious and cleanly separated) */}
+                      <div className="flex items-center justify-between text-xs text-zinc-400 font-normal mt-1.5 mb-2 gap-1.5">
+                        <span className="truncate text-[11px] text-zinc-400 font-medium">{epDurationLabel}</span>
                         {isCurrent ? (
-                          <span className="text-[10px] font-semibold text-red-400 shrink-0">Tiếp tục &rarr;</span>
-                        ) : !isCompleted && !percent ? (
-                          <span className="text-[10px] text-zinc-400 opacity-0 group-hover:opacity-100 transition-opacity shrink-0">
-                            Phát &gt;
+                          <span className="shrink-0 inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-bold tracking-wide uppercase bg-red-600 text-white shadow-sm border border-red-500/40 whitespace-nowrap">
+                            <span className="w-1.5 h-1.5 rounded-full bg-white animate-pulse" />
+                            Đang xem
                           </span>
-                        ) : null}
+                        ) : isCompleted ? (
+                          <span className="shrink-0 text-[10px] font-semibold text-emerald-400 whitespace-nowrap">
+                            Đã xem
+                          </span>
+                        ) : (
+                          <span className="shrink-0 text-[10px] text-zinc-500 group-hover:text-zinc-300 transition-colors whitespace-nowrap opacity-0 group-hover:opacity-100">
+                            Phát ngay &rsaquo;
+                          </span>
+                        )}
                       </div>
 
                       {/* Bottom Progress Bar */}
