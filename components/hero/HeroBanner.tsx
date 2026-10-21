@@ -20,6 +20,7 @@ export const HeroBanner: React.FC<HeroBannerProps> = ({ movie, badgeText }) => {
     selectedMovie,
     playingMovie,
     getWatchProgress,
+    isCardTrailerPlaying,
   } = useNetflix();
   const isModalOpen = Boolean(selectedMovie || playingMovie);
 
@@ -40,6 +41,12 @@ export const HeroBanner: React.FC<HeroBannerProps> = ({ movie, badgeText }) => {
   const isInViewRef = useRef(isInView);
   const isModalOpenRef = useRef(isModalOpen);
   const isMutedRef = useRef(isMuted);
+  const isCardTrailerPlayingRef = useRef(isCardTrailerPlaying);
+
+  const fadeTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const resumeDebounceTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const currentVolumeRef = useRef<number>(100);
+  const isFadingRef = useRef<boolean>(false);
 
   useEffect(() => {
     isTrailerPlayingRef.current = isTrailerPlaying;
@@ -55,7 +62,14 @@ export const HeroBanner: React.FC<HeroBannerProps> = ({ movie, badgeText }) => {
 
   useEffect(() => {
     isMutedRef.current = isMuted;
+    if (!isMuted) {
+      currentVolumeRef.current = 100;
+    }
   }, [isMuted]);
+
+  useEffect(() => {
+    isCardTrailerPlayingRef.current = isCardTrailerPlaying;
+  }, [isCardTrailerPlaying]);
 
   // Helper to send postMessage commands to YouTube player iframe safely and reliably
   const sendIframeCommand = useCallback((func: string, args: any = '') => {
@@ -70,8 +84,117 @@ export const HeroBanner: React.FC<HeroBannerProps> = ({ movie, badgeText }) => {
           JSON.stringify({ event: 'command', func, args: [] }),
           '*'
         );
+      } else if (typeof args === 'number') {
+        iframeRef.current.contentWindow.postMessage(
+          JSON.stringify({ event: 'command', func, args: [args] }),
+          '*'
+        );
       }
     } catch {}
+  }, []);
+
+  // Smoothly fade out audio and pause video
+  const fadeOutAndPause = useCallback((durationMs: number = 550) => {
+    if (fadeTimerRef.current) {
+      clearInterval(fadeTimerRef.current);
+      fadeTimerRef.current = null;
+    }
+    if (resumeDebounceTimerRef.current) {
+      clearTimeout(resumeDebounceTimerRef.current);
+      resumeDebounceTimerRef.current = null;
+    }
+
+    if (!iframeRef.current || !isTrailerPlayingRef.current) return;
+
+    // If muted, no audio to fade, pause immediately
+    if (isMutedRef.current) {
+      sendIframeCommand('pauseVideo');
+      sendIframeCommand('mute');
+      return;
+    }
+
+    isFadingRef.current = true;
+    const steps = 11;
+    const intervalMs = Math.max(20, Math.floor(durationMs / steps)); // ~50ms
+    let currentVol = currentVolumeRef.current > 0 ? currentVolumeRef.current : 100;
+    const stepDec = currentVol / steps;
+
+    fadeTimerRef.current = setInterval(() => {
+      currentVol = Math.max(0, currentVol - stepDec);
+      currentVolumeRef.current = Math.round(currentVol);
+      sendIframeCommand('setVolume', Math.round(currentVol));
+
+      if (currentVol <= 0) {
+        if (fadeTimerRef.current) {
+          clearInterval(fadeTimerRef.current);
+          fadeTimerRef.current = null;
+        }
+        isFadingRef.current = false;
+        sendIframeCommand('pauseVideo');
+        sendIframeCommand('mute');
+      }
+    }, intervalMs);
+  }, [sendIframeCommand]);
+
+  // Smoothly resume video and fade audio back in
+  const fadeInAndResume = useCallback((durationMs: number = 450) => {
+    if (fadeTimerRef.current) {
+      clearInterval(fadeTimerRef.current);
+      fadeTimerRef.current = null;
+    }
+
+    if (!iframeRef.current || !isTrailerPlayingRef.current) return;
+
+    // Start video playback
+    sendIframeCommand('playVideo');
+
+    // If user's preference is muted, remain muted
+    if (isMutedRef.current) {
+      sendIframeCommand('mute');
+      sendIframeCommand('setVolume', 0);
+      return;
+    }
+
+    // Unmute and fade from 0 up to 100
+    isFadingRef.current = true;
+    sendIframeCommand('unMute');
+    sendIframeCommand('setVolume', 0);
+    currentVolumeRef.current = 0;
+
+    const steps = 10;
+    const intervalMs = Math.max(20, Math.floor(durationMs / steps)); // ~45ms
+    let currentVol = 0;
+    const targetVol = 100;
+    const stepInc = targetVol / steps;
+
+    fadeTimerRef.current = setInterval(() => {
+      currentVol = Math.min(targetVol, currentVol + stepInc);
+      currentVolumeRef.current = Math.round(currentVol);
+      sendIframeCommand('setVolume', Math.round(currentVol));
+
+      if (currentVol >= targetVol) {
+        if (fadeTimerRef.current) {
+          clearInterval(fadeTimerRef.current);
+          fadeTimerRef.current = null;
+        }
+        isFadingRef.current = false;
+        sendIframeCommand('setVolume', 100);
+      }
+    }, intervalMs);
+  }, [sendIframeCommand]);
+
+  // Cleanup fade timers on unmount
+  useEffect(() => {
+    return () => {
+      if (fadeTimerRef.current) {
+        clearInterval(fadeTimerRef.current);
+        fadeTimerRef.current = null;
+      }
+      if (resumeDebounceTimerRef.current) {
+        clearTimeout(resumeDebounceTimerRef.current);
+        resumeDebounceTimerRef.current = null;
+      }
+    };
   }, []);
 
   // Fetch trailer from TMDB API and autoplay smoothly if available
@@ -155,21 +278,67 @@ export const HeroBanner: React.FC<HeroBannerProps> = ({ movie, badgeText }) => {
     };
   }, [movie?.id]);
 
-  // Graceful fallback if current trailer key triggers YouTube error (e.g. region-restriction error 150/101)
+  // Handle YouTube player messages, state changes, and genuine errors
   useEffect(() => {
     const handleWindowMessage = (event: MessageEvent) => {
       try {
         const data = typeof event.data === 'string' ? JSON.parse(event.data) : event.data;
+        if (!data) return;
 
-        // Error detection: 150/101 (geo-restricted/embed disabled), 100 (private/removed), 2 (invalid id)
-        const errorCode =
-          typeof data?.info === 'number'
+        // 1. YouTube Player State Handling
+        const playerState =
+          data?.event === 'onStateChange' && typeof data?.info === 'number'
             ? data.info
-            : data?.info?.errorCode;
+            : typeof data?.info?.playerState === 'number'
+            ? data.info.playerState
+            : undefined;
+
+        if (playerState === 1) {
+          // 1 = PLAYING: Video is actively playing!
+          setIsTrailerReady(true);
+        } else if (
+          playerState === 5 ||
+          playerState === -1 ||
+          (playerState === 2 && !isCardTrailerPlayingRef.current)
+        ) {
+          // 5 = CUED, -1 = UNSTARTED, 2 = PAUSED
+          // Proactively enforce playVideo so video does not stay stuck in pause
+          const isAppActive =
+            typeof document !== 'undefined'
+              ? document.visibilityState === 'visible' && document.hasFocus()
+              : true;
+          const shouldPlay =
+            isInViewRef.current &&
+            !isModalOpenRef.current &&
+            isAppActive &&
+            !isCardTrailerPlayingRef.current &&
+            isTrailerPlayingRef.current;
+
+          if (shouldPlay) {
+            sendIframeCommand('playVideo');
+            if (!isMutedRef.current) {
+              sendIframeCommand('unMute');
+              sendIframeCommand('setVolume', 100);
+            }
+          }
+        }
+
+        // 2. Genuine YouTube Error Detection
+        // MUST only check error codes if this is an actual onError event or has an explicit errorCode property!
+        const isOnErrorEvent = data?.event === 'onError';
+        const explicitErrorCode =
+          data?.info?.errorCode ??
+          (isOnErrorEvent
+            ? typeof data?.info === 'number'
+              ? data.info
+              : typeof data?.data === 'number'
+              ? data.data
+              : undefined
+            : undefined);
 
         const isError =
-          data?.event === 'onError' ||
-          (errorCode !== undefined && [2, 5, 100, 101, 150].includes(errorCode));
+          isOnErrorEvent ||
+          (explicitErrorCode !== undefined && [2, 5, 100, 101, 150].includes(explicitErrorCode));
 
         if (isError) {
           if (backupKeys.length > 0) {
@@ -190,7 +359,7 @@ export const HeroBanner: React.FC<HeroBannerProps> = ({ movie, badgeText }) => {
 
     window.addEventListener('message', handleWindowMessage);
     return () => window.removeEventListener('message', handleWindowMessage);
-  }, [backupKeys]);
+  }, [backupKeys, sendIframeCommand]);
 
   // Pause trailer when user scrolls down away from Hero, resume when back in view
   useEffect(() => {
@@ -225,6 +394,7 @@ export const HeroBanner: React.FC<HeroBannerProps> = ({ movie, badgeText }) => {
         hasFocus &&
         isInViewRef.current &&
         !isModalOpenRef.current &&
+        !isCardTrailerPlayingRef.current &&
         isTrailerPlayingRef.current
       ) {
         sendIframeCommand('playVideo');
@@ -267,33 +437,88 @@ export const HeroBanner: React.FC<HeroBannerProps> = ({ movie, badgeText }) => {
     };
   }, [sendIframeCommand]);
 
+  // Coordinate with card hover trailer: when card starts playing trailer, smoothly fade out & pause HeroBanner;
+  // when card trailer stops, smoothly resume HeroBanner
+  useEffect(() => {
+    if (!iframeRef.current || !isTrailerPlaying || !trailerKey) return;
+
+    const isAppActive = isTabVisible && isWindowFocused;
+    const eligibleToPlay = isInView && !isModalOpen && isAppActive;
+
+    if (isCardTrailerPlaying) {
+      if (resumeDebounceTimerRef.current) {
+        clearTimeout(resumeDebounceTimerRef.current);
+        resumeDebounceTimerRef.current = null;
+      }
+      // Card trailer active: smoothly fade out HeroBanner audio then pause video
+      fadeOutAndPause(550);
+    } else {
+      // Card trailer stopped: debounce slightly (200ms) to avoid stutter when user moves between cards
+      if (eligibleToPlay) {
+        if (resumeDebounceTimerRef.current) {
+          clearTimeout(resumeDebounceTimerRef.current);
+        }
+        resumeDebounceTimerRef.current = setTimeout(() => {
+          if (
+            !isCardTrailerPlayingRef.current &&
+            isInViewRef.current &&
+            !isModalOpenRef.current
+          ) {
+            fadeInAndResume(450);
+          }
+        }, 200);
+      }
+    }
+
+    return () => {
+      if (resumeDebounceTimerRef.current) {
+        clearTimeout(resumeDebounceTimerRef.current);
+        resumeDebounceTimerRef.current = null;
+      }
+    };
+  }, [
+    isCardTrailerPlaying,
+    isTrailerPlaying,
+    trailerKey,
+    isInView,
+    isModalOpen,
+    isTabVisible,
+    isWindowFocused,
+    fadeOutAndPause,
+    fadeInAndResume,
+  ]);
+
   // Sync play / pause with viewport visibility, window/tab focus, and modal state
   useEffect(() => {
     if (iframeRef.current && isTrailerPlaying && trailerKey) {
       const isAppActive = isTabVisible && isWindowFocused;
-      const shouldPlay = isInView && !isModalOpen && isAppActive;
+      const shouldPlay = isInView && !isModalOpen && isAppActive && !isCardTrailerPlaying;
 
       if (shouldPlay) {
         sendIframeCommand('playVideo');
         if (!isMuted) {
           sendIframeCommand('unMute');
         }
-      } else {
+      } else if (!isCardTrailerPlaying) {
         sendIframeCommand('pauseVideo');
         sendIframeCommand('mute');
       }
     }
-  }, [isInView, isModalOpen, isTabVisible, isWindowFocused, isTrailerPlaying, trailerKey, isMuted, sendIframeCommand]);
+  }, [isInView, isModalOpen, isTabVisible, isWindowFocused, isTrailerPlaying, trailerKey, isMuted, isCardTrailerPlaying, sendIframeCommand]);
 
   // Sync mute / unmute state with YouTube iframe via postMessage
   useEffect(() => {
     if (iframeRef.current && isTrailerPlaying && trailerKey) {
       const isAppActive = isTabVisible && isWindowFocused;
-      if (isAppActive && !isModalOpen) {
+      if (isAppActive && !isModalOpen && !isCardTrailerPlaying) {
         sendIframeCommand(isMuted ? 'mute' : 'unMute');
+        if (!isMuted) {
+          currentVolumeRef.current = 100;
+          sendIframeCommand('setVolume', 100);
+        }
       }
     }
-  }, [isMuted, isTrailerPlaying, trailerKey, isTabVisible, isWindowFocused, isModalOpen, sendIframeCommand]);
+  }, [isMuted, isTrailerPlaying, trailerKey, isTabVisible, isWindowFocused, isModalOpen, isCardTrailerPlaying, sendIframeCommand]);
 
   if (!movie) {
     return (
@@ -392,7 +617,7 @@ export const HeroBanner: React.FC<HeroBannerProps> = ({ movie, badgeText }) => {
                 <iframe
                   ref={iframeRef}
                   id="hero-trailer-iframe"
-                  src={`https://www.youtube-nocookie.com/embed/${trailerKey}?autoplay=1&mute=${isMuted ? 1 : 0}&controls=0&modestbranding=1&rel=0&loop=1&playlist=${trailerKey}&playsinline=1&enablejsapi=1${
+                  src={`https://www.youtube-nocookie.com/embed/${trailerKey}?autoplay=1&mute=1&controls=0&modestbranding=1&rel=0&loop=1&playlist=${trailerKey}&playsinline=1&enablejsapi=1${
                     typeof window !== 'undefined' && window.location.origin
                       ? `&origin=${encodeURIComponent(window.location.origin)}`
                       : ''
@@ -412,13 +637,38 @@ export const HeroBanner: React.FC<HeroBannerProps> = ({ movie, badgeText }) => {
                       typeof document !== 'undefined'
                         ? document.visibilityState === 'visible' && document.hasFocus()
                         : true;
-                    const shouldPlay = isInView && !isModalOpen && isAppActive;
+                    const shouldPlay =
+                      isInView &&
+                      !isModalOpen &&
+                      isAppActive &&
+                      !isCardTrailerPlayingRef.current;
 
-                    if (!shouldPlay) {
+                    if (shouldPlay) {
+                      // Proactively start playback to ensure browser autoplay policy doesn't stall
+                      sendIframeCommand('playVideo');
+                      setTimeout(() => {
+                        if (!isCardTrailerPlayingRef.current && !isModalOpenRef.current) {
+                          sendIframeCommand('playVideo');
+                        }
+                      }, 150);
+                      setTimeout(() => {
+                        if (!isCardTrailerPlayingRef.current && !isModalOpenRef.current) {
+                          sendIframeCommand('playVideo');
+                        }
+                      }, 350);
+
+                      if (!isMuted) {
+                        sendIframeCommand('unMute');
+                        sendIframeCommand('setVolume', 100);
+                        currentVolumeRef.current = 100;
+                      } else {
+                        sendIframeCommand('mute');
+                        sendIframeCommand('setVolume', 0);
+                        currentVolumeRef.current = 0;
+                      }
+                    } else {
                       sendIframeCommand('pauseVideo');
                       sendIframeCommand('mute');
-                    } else if (!isMuted) {
-                      sendIframeCommand('unMute');
                     }
                   }}
                   className={`w-[124%] h-[124%] -ml-[12%] -mt-[12%] object-cover transition-opacity duration-1000 ${

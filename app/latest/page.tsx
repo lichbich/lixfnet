@@ -2,6 +2,7 @@
 
 import React, { useEffect, useState } from 'react';
 import { MovieRow } from '@/components/rows/MovieRow';
+import { RowSkeleton } from '@/components/rows/RowSkeleton';
 import { SearchResults } from '@/components/search/SearchResults';
 import { useNetflix } from '@/context/NetflixContext';
 import {
@@ -20,11 +21,13 @@ export default function LatestPage() {
   const [newUpdatedPage3, setNewUpdatedPage3] = useState<Movie[]>([]);
   const [newShows, setNewShows] = useState<Movie[]>([]);
   const [newFeatures, setNewFeatures] = useState<Movie[]>([]);
+  const [isLoading, setIsLoading] = useState<boolean>(true);
 
   useEffect(() => {
     let isMounted = true;
     async function loadLatest() {
       try {
+        setIsLoading(true);
         const [chinaSet, page1, page2, page3, page4, shows, features] = await Promise.all([
           getChineseMovieSlugs(),
           getNewUpdatedMovies(1),
@@ -45,6 +48,8 @@ export default function LatestPage() {
         }
       } catch (err) {
         console.error('Error loading latest movies:', err);
+      } finally {
+        if (isMounted) setIsLoading(false);
       }
     }
     loadLatest();
@@ -61,52 +66,62 @@ export default function LatestPage() {
     <div className="min-h-screen pt-24 pb-16">
       <div className="px-4 sm:px-8 md:px-12 mb-6">
         <h1 className="text-3xl font-extrabold text-white">Mới & Phổ biến</h1>
-        <p className="text-sm text-zinc-400 mt-1">
-          Cập nhật trực tiếp danh sách phim mới nhất từng giờ từ máy chủ Nguồn C
-        </p>
       </div>
 
       <div className="space-y-2">
-        {newUpdatedPage1.length > 0 && (
-          <MovieRow
-            title="Vừa mới cập nhật hôm nay (Trang 1)"
-            movies={newUpdatedPage1}
-            type="standard"
-          />
-        )}
+        {isLoading ? (
+          <>
+            <RowSkeleton title="Vừa mới cập nhật hôm nay" variant="landscape" />
+            <RowSkeleton title="Danh sách mới cập nhật tiếp theo" variant="landscape" />
+            <RowSkeleton title="TV Shows mới lên sóng" variant="standard" />
+            <RowSkeleton title="Phim lẻ mới phát hành" variant="standard" />
+            <RowSkeleton title="Phim thịnh hành vừa cập nhật" variant="landscape" />
+          </>
+        ) : (
+          <>
+            {newUpdatedPage1.length > 0 && (
+              <MovieRow
+                title="Vừa mới cập nhật hôm nay"
+                movies={newUpdatedPage1}
+                type="standard"
+              />
+            )}
 
-        {newUpdatedPage2.length > 0 && (
-          <MovieRow
-            title="Danh sách mới cập nhật tiếp theo (Trang 2)"
-            movies={newUpdatedPage2}
-            type="standard"
-          />
-        )}
+            {newUpdatedPage2.length > 0 && (
+              <MovieRow
+                title="Danh sách mới cập nhật tiếp theo"
+                movies={newUpdatedPage2}
+                type="standard"
+              />
+            )}
 
-        {newShows.length > 0 && (
-          <MovieRow
-            title="TV Shows mới lên sóng"
-            movies={newShows}
-            type="standard"
-          />
-        )}
+            {newShows.length > 0 && (
+              <MovieRow
+                title="TV Shows mới lên sóng"
+                movies={newShows}
+                type="standard"
+              />
+            )}
 
-        {newFeatures.length > 0 && (
-          <MovieRow
-            title="Phim lẻ mới phát hành"
-            movies={newFeatures}
-            type="standard"
-          />
-        )}
+            {newFeatures.length > 0 && (
+              <MovieRow
+                title="Phim lẻ mới phát hành"
+                movies={newFeatures}
+                type="standard"
+              />
+            )}
 
-        {newUpdatedPage3.length > 0 && (
-          <MovieRow
-            title="Kho phim cập nhật trang 3"
-            movies={newUpdatedPage3}
-            type="standard"
-          />
+            {newUpdatedPage3.length > 0 && (
+              <MovieRow
+                title="Phim thịnh hành vừa cập nhật"
+                movies={newUpdatedPage3}
+                type="standard"
+              />
+            )}
+          </>
         )}
       </div>
     </div>
   );
 }
+

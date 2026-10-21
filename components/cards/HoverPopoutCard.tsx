@@ -32,6 +32,7 @@ export const HoverPopoutCard: React.FC = () => {
     clearWatchProgress,
     isMuted,
     toggleMute,
+    setIsCardTrailerPlaying,
   } = useNetflix();
 
   const isModalOpen = Boolean(selectedMovie || playingMovie);
@@ -96,6 +97,15 @@ export const HoverPopoutCard: React.FC = () => {
       }
     }
   }, [isModalOpen]);
+
+  // Broadcast to global context when this card is actively playing its trailer
+  useEffect(() => {
+    const isPlaying = Boolean(isOpen && activeMovie && isTrailerPlaying && trailerKey);
+    setIsCardTrailerPlaying(isPlaying);
+    return () => {
+      setIsCardTrailerPlaying(false);
+    };
+  }, [isOpen, activeMovie, isTrailerPlaying, trailerKey, setIsCardTrailerPlaying]);
 
   // Immediately dismiss popout on any window/container scroll or wheel motion
   useEffect(() => {
@@ -202,21 +212,61 @@ export const HoverPopoutCard: React.FC = () => {
     };
   }, [activeMovie?.id, isOpen]);
 
-  // Graceful fallback if current trailer key triggers YouTube error (e.g. region-restriction error 150/101)
+  // Handle YouTube player messages, state changes, and genuine errors
   useEffect(() => {
     const handleWindowMessage = (event: MessageEvent) => {
       try {
         const data = typeof event.data === 'string' ? JSON.parse(event.data) : event.data;
+        if (!data) return;
 
-        // Error detection: 150/101 (geo-restricted/embed disabled), 100 (private/removed), 2 (invalid id)
-        const errorCode =
-          typeof data?.info === 'number'
+        // 1. YouTube Player State Handling
+        const playerState =
+          data?.event === 'onStateChange' && typeof data?.info === 'number'
             ? data.info
-            : data?.info?.errorCode;
+            : typeof data?.info?.playerState === 'number'
+            ? data.info.playerState
+            : undefined;
+
+        if (playerState === 1) {
+          // 1 = PLAYING
+          setIsTrailerReady(true);
+        } else if (playerState === 5 || playerState === -1 || playerState === 2) {
+          // 5 = CUED, -1 = UNSTARTED, 2 = PAUSED
+          // Enforce playback so card trailer doesn't get stuck in paused state
+          try {
+            iframeRef.current?.contentWindow?.postMessage(
+              JSON.stringify({ event: 'command', func: 'playVideo', args: '' }),
+              '*'
+            );
+            if (!isMuted) {
+              iframeRef.current?.contentWindow?.postMessage(
+                JSON.stringify({ event: 'command', func: 'unMute', args: '' }),
+                '*'
+              );
+              iframeRef.current?.contentWindow?.postMessage(
+                JSON.stringify({ event: 'command', func: 'setVolume', args: [100] }),
+                '*'
+              );
+            }
+          } catch {}
+        }
+
+        // 2. Genuine YouTube Error Detection
+        // MUST only check error codes if this is an actual onError event or has an explicit errorCode property!
+        const isOnErrorEvent = data?.event === 'onError';
+        const explicitErrorCode =
+          data?.info?.errorCode ??
+          (isOnErrorEvent
+            ? typeof data?.info === 'number'
+              ? data.info
+              : typeof data?.data === 'number'
+              ? data.data
+              : undefined
+            : undefined);
 
         const isError =
-          data?.event === 'onError' ||
-          (errorCode !== undefined && [2, 5, 100, 101, 150].includes(errorCode));
+          isOnErrorEvent ||
+          (explicitErrorCode !== undefined && [2, 5, 100, 101, 150].includes(explicitErrorCode));
 
         if (isError) {
           if (backupKeys.length > 0) {
@@ -237,7 +287,7 @@ export const HoverPopoutCard: React.FC = () => {
 
     window.addEventListener('message', handleWindowMessage);
     return () => window.removeEventListener('message', handleWindowMessage);
-  }, [backupKeys]);
+  }, [backupKeys, isMuted]);
 
   // Sync mute/unmute state with YouTube iframe via postMessage
   useEffect(() => {
@@ -371,7 +421,7 @@ export const HoverPopoutCard: React.FC = () => {
           <div className="absolute inset-0 w-full h-full overflow-hidden pointer-events-none">
             <iframe
               ref={iframeRef}
-              src={`https://www.youtube-nocookie.com/embed/${trailerKey}?autoplay=1&mute=${isMuted ? 1 : 0}&controls=0&modestbranding=1&rel=0&loop=1&playlist=${trailerKey}&playsinline=1&enablejsapi=1${
+              src={`https://www.youtube-nocookie.com/embed/${trailerKey}?autoplay=1&mute=1&controls=0&modestbranding=1&rel=0&loop=1&playlist=${trailerKey}&playsinline=1&enablejsapi=1${
                 typeof window !== 'undefined' && window.location.origin
                   ? `&origin=${encodeURIComponent(window.location.origin)}`
                   : ''
@@ -385,15 +435,46 @@ export const HoverPopoutCard: React.FC = () => {
                     '*'
                   );
                 } catch {}
+
+                // Proactively start playback
+                try {
+                  iframeRef.current?.contentWindow?.postMessage(
+                    JSON.stringify({ event: 'command', func: 'playVideo', args: '' }),
+                    '*'
+                  );
+                } catch {}
+
+                setTimeout(() => {
+                  try {
+                    iframeRef.current?.contentWindow?.postMessage(
+                      JSON.stringify({ event: 'command', func: 'playVideo', args: '' }),
+                      '*'
+                    );
+                  } catch {}
+                }, 150);
+
                 if (!isMuted) {
-                  iframeRef.current?.contentWindow?.postMessage(
-                    JSON.stringify({ event: 'command', func: 'unMute', args: '' }),
-                    '*'
-                  );
-                  iframeRef.current?.contentWindow?.postMessage(
-                    JSON.stringify({ event: 'command', func: 'unMute', args: [] }),
-                    '*'
-                  );
+                  try {
+                    iframeRef.current?.contentWindow?.postMessage(
+                      JSON.stringify({ event: 'command', func: 'unMute', args: '' }),
+                      '*'
+                    );
+                    iframeRef.current?.contentWindow?.postMessage(
+                      JSON.stringify({ event: 'command', func: 'setVolume', args: [100] }),
+                      '*'
+                    );
+                  } catch {}
+                } else {
+                  try {
+                    iframeRef.current?.contentWindow?.postMessage(
+                      JSON.stringify({ event: 'command', func: 'mute', args: '' }),
+                      '*'
+                    );
+                    iframeRef.current?.contentWindow?.postMessage(
+                      JSON.stringify({ event: 'command', func: 'setVolume', args: [0] }),
+                      '*'
+                    );
+                  } catch {}
                 }
               }}
               className={`w-[114%] h-[114%] -ml-[7%] -mt-[7%] object-cover transition-opacity duration-700 ${

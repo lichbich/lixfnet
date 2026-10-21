@@ -49,6 +49,8 @@ interface NetflixContextType {
   // Hover Popout Card Coordination
   hoveredMovie: Movie | null;
   hoverRect: HoverRect | null;
+  isCardTrailerPlaying: boolean;
+  setIsCardTrailerPlaying: (playing: boolean) => void;
   onCardHover: (movie: Movie, rect: DOMRect) => void;
   onCardLeave: () => void;
   onPopoutEnter: () => void;
@@ -150,6 +152,7 @@ export const NetflixProvider: React.FC<{ children: React.ReactNode }> = ({ child
   // Hover Popout State
   const [hoveredMovie, setHoveredMovie] = useState<Movie | null>(null);
   const [hoverRect, setHoverRect] = useState<HoverRect | null>(null);
+  const [isCardTrailerPlaying, setIsCardTrailerPlaying] = useState<boolean>(false);
 
   // Initialize My List from localStorage
   useEffect(() => {
@@ -535,6 +538,7 @@ export const NetflixProvider: React.FC<{ children: React.ReactNode }> = ({ child
     clearHoverTimers();
     setHoveredMovie(null);
     setHoverRect(null);
+    setIsCardTrailerPlaying(false);
   }, [clearHoverTimers]);
 
   const onCardHover = useCallback((movie: Movie, rect: DOMRect) => {
@@ -704,6 +708,8 @@ export const NetflixProvider: React.FC<{ children: React.ReactNode }> = ({ child
         clearWatchProgress,
         hoveredMovie,
         hoverRect,
+        isCardTrailerPlaying,
+        setIsCardTrailerPlaying,
         onCardHover,
         onCardLeave,
         onPopoutEnter,

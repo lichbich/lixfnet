@@ -233,7 +233,11 @@ export function mapNguonCToMovie(item: NguonCItem | NguonCDetailMovie, rank?: nu
     isTop10: rank !== undefined ? rank <= 10 : false,
   };
 
-  const parsedYear = typeof item.year === 'number' ? item.year : parseInt(item.year || '2026', 10) || 2026;
+  let parsedYear = typeof item.year === 'number' ? item.year : parseInt(String(item.year || ''), 10);
+  if (!parsedYear || isNaN(parsedYear)) {
+    const yearMatch = `${item.name} ${item.original_name || ''}`.match(/\b(19\d\d|20\d\d)\b/);
+    parsedYear = yearMatch ? parseInt(yearMatch[1], 10) : 0;
+  }
 
   return {
     id: item.slug || `movie-${Math.random()}`,
@@ -321,6 +325,73 @@ export async function getMoviesByGenre(slug: string, page = 1): Promise<Movie[]>
   }
 }
 
+/**
+ * Fetch movies by genre slug with pagination details
+ */
+export async function getMoviesByGenrePaginated(
+  slug: string,
+  page = 1
+): Promise<{ movies: Movie[]; totalPages: number; totalItems: number }> {
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      const res = await fetch(`${API_BASE_URL}/films/the-loai/${slug}?page=${page}`, {
+        headers: {
+          Accept: 'application/json',
+        },
+        next: { revalidate: 300 },
+      });
+      if (!res.ok) throw new Error(`HTTP error! status: ${res.status}`);
+      const data: NguonCListResponse = await res.json();
+      return {
+        movies: (data.items || []).map((item, idx) => mapNguonCToMovie(item, (page - 1) * 10 + idx + 1)),
+        totalPages: data.paginate?.total_page || 1,
+        totalItems: data.paginate?.total_items || 0,
+      };
+    } catch (error) {
+      if (attempt === 0) {
+        await new Promise((r) => setTimeout(r, 350));
+        continue;
+      }
+      console.error(`Error fetching genre paginated ${slug} (page ${page}):`, error);
+      return { movies: [], totalPages: 0, totalItems: 0 };
+    }
+  }
+  return { movies: [], totalPages: 0, totalItems: 0 };
+}
+
+/**
+ * Unified filter query supporting both country and genre slugs with pagination
+ */
+export async function getFilterMoviesPaginated(
+  slug: string,
+  page = 1
+): Promise<{ movies: Movie[]; totalPages: number; totalItems: number }> {
+  const isCountry = [
+    'han-quoc',
+    'my',
+    'nhat-ban',
+    'viet-nam',
+    'thai-lan',
+    'anh',
+    'phap',
+    'duc',
+    'an-do',
+    'nga',
+    'hong-kong',
+    'dai-loan',
+    'tay-ban-nha',
+    'italy',
+    'uc',
+    'canada',
+  ].includes(slug);
+
+  if (isCountry) {
+    return getMoviesByCountryPaginated(slug, page);
+  }
+  return getMoviesByGenrePaginated(slug, page);
+}
+
+
 export interface CountryOption {
   slug: string;
   name: string;
@@ -374,21 +445,31 @@ export async function getMoviesByCountryPaginated(
   slug: string,
   page = 1
 ): Promise<{ movies: Movie[]; totalPages: number; totalItems: number }> {
-  try {
-    const res = await fetch(`${API_BASE_URL}/films/quoc-gia/${slug}?page=${page}`, {
-      next: { revalidate: 300 },
-    });
-    if (!res.ok) throw new Error(`HTTP error! status: ${res.status}`);
-    const data: NguonCListResponse = await res.json();
-    return {
-      movies: (data.items || []).map((item, idx) => mapNguonCToMovie(item, (page - 1) * 10 + idx + 1)),
-      totalPages: data.paginate?.total_page || 1,
-      totalItems: data.paginate?.total_items || 0,
-    };
-  } catch (error) {
-    console.error(`Error fetching country paginated ${slug}:`, error);
-    return { movies: [], totalPages: 1, totalItems: 0 };
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      const res = await fetch(`${API_BASE_URL}/films/quoc-gia/${slug}?page=${page}`, {
+        headers: {
+          Accept: 'application/json',
+        },
+        next: { revalidate: 300 },
+      });
+      if (!res.ok) throw new Error(`HTTP error! status: ${res.status}`);
+      const data: NguonCListResponse = await res.json();
+      return {
+        movies: (data.items || []).map((item, idx) => mapNguonCToMovie(item, (page - 1) * 10 + idx + 1)),
+        totalPages: data.paginate?.total_page || 1,
+        totalItems: data.paginate?.total_items || 0,
+      };
+    } catch (error) {
+      if (attempt === 0) {
+        await new Promise((r) => setTimeout(r, 350));
+        continue;
+      }
+      console.error(`Error fetching country paginated ${slug} (page ${page}):`, error);
+      return { movies: [], totalPages: 0, totalItems: 0 };
+    }
   }
+  return { movies: [], totalPages: 0, totalItems: 0 };
 }
 
 /**

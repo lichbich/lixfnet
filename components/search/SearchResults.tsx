@@ -58,7 +58,7 @@ export const SearchResults: React.FC = () => {
       {isLoading && combinedMovies.length === 0 ? (
         <div className="flex flex-col items-center justify-center py-24 text-zinc-400">
           <Loader2 className="w-8 h-8 animate-spin text-red-500 mb-3" />
-          <p className="text-sm">Đang tìm kiếm phim từ máy chủ Nguồn C...</p>
+          <p className="text-sm">Đang tìm kiếm phim...</p>
         </div>
       ) : combinedMovies.length === 0 ? (
         <div className="text-center py-20 text-zinc-400">

@@ -160,8 +160,11 @@ export const MovieCard: React.FC<MovieCardProps> = ({ movie, variant = 'landscap
           </h4>
           <div className="flex items-center gap-1.5 sm:gap-2 text-[10px] sm:text-[11px] mb-1">
             <span className="text-green-400 font-bold">{movie.matchRate}% Phù hợp</span>
+            {Boolean(movie.year && movie.year > 0) && (
+              <span className="text-zinc-200 font-semibold">{movie.year}</span>
+            )}
             <RatingBadge rating={movie.rating} className="text-[9px] sm:text-[10px] px-1 py-0" />
-            <span className="text-zinc-400">{movie.seasons}</span>
+            <span className="text-zinc-400 truncate max-w-[80px]">{movie.seasons}</span>
           </div>
 
           {/* Genres */}

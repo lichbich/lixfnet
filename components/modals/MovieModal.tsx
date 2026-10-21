@@ -11,10 +11,12 @@ import {
   VolumeX,
   Tv,
   Loader2,
+  Layers,
 } from 'lucide-react';
 import { RatingBadge, QualityBadge } from '@/components/ui/Badge';
 import { useNetflix } from '@/context/NetflixContext';
 import { getSimilarMovies } from '@/services/movieApi';
+import { getMovieCollection, MovieCollection } from '@/services/collectionService';
 import { Movie } from '@/types';
 
 export const MovieModal: React.FC = () => {
@@ -37,6 +39,8 @@ export const MovieModal: React.FC = () => {
   const [isLiked, setIsLiked] = useState(false);
   const [similarMovies, setSimilarMovies] = useState<Movie[]>([]);
   const [isLoadingSimilar, setIsLoadingSimilar] = useState(false);
+  const [collection, setCollection] = useState<MovieCollection | null>(null);
+  const [isLoadingCollection, setIsLoadingCollection] = useState(false);
   const [episodeRangeIndex, setEpisodeRangeIndex] = useState<number | 'all'>(0);
 
   // Smooth enter & exit animation state
@@ -310,6 +314,39 @@ export const MovieModal: React.FC = () => {
     };
   }, [displayedMovie?.id, displayedMovie?.slug, displayedMovie?.countrySlug, displayedMovie?.country]);
 
+  // Load movie collection / franchise (e.g. Doctor X, Batman, Dragon Ball, etc.)
+  useEffect(() => {
+    const target = displayedMovie;
+    if (!target) {
+      setCollection(null);
+      return;
+    }
+    const currentMovie: Movie = target;
+    let isCancelled = false;
+
+    async function loadCollection() {
+      setIsLoadingCollection(true);
+      try {
+        const res = await getMovieCollection(currentMovie);
+        if (!isCancelled) {
+          setCollection(res);
+        }
+      } catch (err) {
+        console.error('Failed to load movie collection:', err);
+      } finally {
+        if (!isCancelled) {
+          setIsLoadingCollection(false);
+        }
+      }
+    }
+
+    loadCollection();
+
+    return () => {
+      isCancelled = true;
+    };
+  }, [displayedMovie?.id, displayedMovie?.slug, displayedMovie?.title]);
+
   // Auto-sync episode range tab to the currently watched episode for long series
   useEffect(() => {
     if (!displayedMovie) return;
@@ -444,7 +481,7 @@ export const MovieModal: React.FC = () => {
             <div className="absolute inset-0 w-full h-full overflow-hidden pointer-events-none">
               <iframe
                 ref={iframeRef}
-                src={`https://www.youtube-nocookie.com/embed/${trailerKey}?autoplay=1&mute=${isMuted ? 1 : 0}&controls=0&modestbranding=1&rel=0&loop=1&playlist=${trailerKey}&playsinline=1&enablejsapi=1${
+                src={`https://www.youtube-nocookie.com/embed/${trailerKey}?autoplay=1&mute=1&controls=0&modestbranding=1&rel=0&loop=1&playlist=${trailerKey}&playsinline=1&enablejsapi=1${
                   typeof window !== 'undefined' && window.location.origin
                     ? `&origin=${encodeURIComponent(window.location.origin)}`
                     : ''
@@ -472,11 +509,21 @@ export const MovieModal: React.FC = () => {
                       JSON.stringify({ event: 'command', func: 'mute', args: '' }),
                       '*'
                     );
-                  } else if (!isMuted) {
+                  } else {
                     iframeRef.current?.contentWindow?.postMessage(
-                      JSON.stringify({ event: 'command', func: 'unMute', args: '' }),
+                      JSON.stringify({ event: 'command', func: 'playVideo', args: '' }),
                       '*'
                     );
+                    if (!isMuted) {
+                      iframeRef.current?.contentWindow?.postMessage(
+                        JSON.stringify({ event: 'command', func: 'unMute', args: '' }),
+                        '*'
+                      );
+                      iframeRef.current?.contentWindow?.postMessage(
+                        JSON.stringify({ event: 'command', func: 'setVolume', args: [100] }),
+                        '*'
+                      );
+                    }
                   }
                 }}
                 className={`w-[124%] h-[124%] -ml-[12%] -mt-[12%] object-cover transition-opacity duration-1000 ${
@@ -955,6 +1002,144 @@ export const MovieModal: React.FC = () => {
                 </div>
               </div>
             )}
+
+          {/* Movie Collection (Bộ sưu tập Series / Vũ trụ phim) */}
+          {collection && collection.movies.length > 1 && (
+            <div className="mt-10 border-t border-zinc-800 pt-6">
+              <div className="flex items-center gap-2.5 mb-4">
+                <div className="w-6 h-6 rounded flex items-center justify-center bg-white/10 text-white">
+                  <Layers className="w-3.5 h-3.5" />
+                </div>
+                <h3 className="text-xl font-bold text-white tracking-tight">
+                  Bộ sưu tập {collection.collectionTitle}
+                </h3>
+                <span className="text-xs text-zinc-400 font-medium bg-zinc-800/80 px-2 py-0.5 rounded-full border border-white/5">
+                  {collection.movies.length} phần
+                </span>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4">
+                {collection.movies.map((colMovie) => {
+                  const isCurrent =
+                    colMovie.id === movie.id || (colMovie.slug && colMovie.slug === movie.slug);
+
+                  const durationBadge =
+                    colMovie.seasons ||
+                    (colMovie.duration ? colMovie.duration : null) ||
+                    (colMovie.type === 'series' ? 'Nhiều tập' : 'Phim lẻ');
+
+                  return (
+                    <div
+                      key={colMovie.id}
+                      onClick={() => {
+                        if (!isCurrent) {
+                          openModal(colMovie);
+                        }
+                      }}
+                      className={`relative rounded-lg overflow-hidden border transition-all duration-200 flex flex-col justify-between group ${
+                        isCurrent
+                          ? 'bg-zinc-900 border-red-500/80 ring-1 ring-red-500/50 shadow-[0_0_20px_rgba(229,9,20,0.2)]'
+                          : 'bg-[#202020] border-white/5 hover:border-white/20 hover:bg-zinc-850 cursor-pointer hover:-translate-y-0.5'
+                      }`}
+                    >
+                      {/* 16:9 Thumbnail Header */}
+                      <div className="relative aspect-video w-full overflow-hidden bg-zinc-800">
+                        <img
+                          src={colMovie.backdropUrl || colMovie.posterUrl}
+                          alt={colMovie.title}
+                          className="w-full h-full object-cover object-top group-hover:scale-105 transition duration-300"
+                        />
+                        <div className="absolute inset-0 bg-gradient-to-t from-[#202020] via-transparent to-black/30 pointer-events-none" />
+
+                        {/* Top Left Badge (e.g. TOP 10) */}
+                        <div className="absolute top-2.5 left-2.5 flex items-center gap-1.5">
+                          <span className="bg-red-600 text-white font-extrabold text-[9px] px-1.5 py-0.5 rounded shadow tracking-wider">
+                            TOP 10
+                          </span>
+                        </div>
+
+                        {/* Top Right Duration / Seasons Badge */}
+                        {durationBadge && (
+                          <div className="absolute top-2.5 right-2.5 bg-black/75 backdrop-blur-sm px-2 py-0.5 rounded text-[11px] font-bold text-zinc-200 border border-white/10">
+                            {durationBadge}
+                          </div>
+                        )}
+
+                        {/* Current movie indicator */}
+                        {isCurrent && (
+                          <div className="absolute bottom-2 left-2.5">
+                            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider bg-red-600 text-white shadow-md">
+                              <span className="w-1.5 h-1.5 rounded-full bg-white animate-pulse" />
+                              Phim đang chọn
+                            </span>
+                          </div>
+                        )}
+                      </div>
+
+                      {/* Card Content */}
+                      <div className="p-3.5 flex flex-col justify-between flex-1">
+                        <div>
+                          {/* Metadata row: Age rating, HD, Spatial Audio, Year */}
+                          <div className="flex items-center justify-between gap-2 mb-2">
+                            <div className="flex items-center gap-1.5 flex-wrap">
+                              <span className="text-[10px] font-bold text-zinc-300 px-1.5 py-0.5 rounded bg-zinc-800 border border-white/10">
+                                {colMovie.rating || 'T16'}
+                              </span>
+                              <span className="text-[10px] font-bold text-zinc-400 px-1.5 py-0.5 rounded border border-zinc-700">
+                                {colMovie.quality || 'HD'}
+                              </span>
+                              <span className="inline-flex items-center gap-1 text-[10px] text-zinc-400 font-medium">
+                                <Volume2 className="w-3 h-3 text-zinc-400" />
+                                Âm thanh không gian
+                              </span>
+                              {colMovie.year ? (
+                                <span className="text-xs text-zinc-400 font-medium">
+                                  {colMovie.year}
+                                </span>
+                              ) : null}
+                            </div>
+
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                toggleMyList(colMovie);
+                              }}
+                              className="w-7 h-7 rounded-full border border-white/20 hover:border-white flex items-center justify-center text-white shrink-0 hover:bg-white/10 transition"
+                              title={isInMyList(colMovie.id) ? 'Xóa khỏi danh sách' : 'Thêm vào danh sách'}
+                            >
+                              {isInMyList(colMovie.id) ? (
+                                <Check className="w-3.5 h-3.5 text-green-400" />
+                              ) : (
+                                <Plus className="w-3.5 h-3.5" />
+                              )}
+                            </button>
+                          </div>
+
+                          {/* Movie Title */}
+                          <h4 className="font-bold text-sm text-white line-clamp-1 group-hover:text-red-400 transition-colors">
+                            {colMovie.title}
+                          </h4>
+
+                          {/* Movie Description */}
+                          <p className="text-xs text-zinc-400 line-clamp-3 leading-relaxed mt-1.5">
+                            {colMovie.description || 'Đang cập nhật nội dung phim...'}
+                          </p>
+                        </div>
+
+                        {/* Action prompt if not current */}
+                        {!isCurrent && (
+                          <div className="mt-3 pt-2.5 border-t border-white/5 flex items-center justify-between text-[11px] text-zinc-400 group-hover:text-zinc-200">
+                            <span>Xem chi tiết phần này</span>
+                            <span className="text-red-400 font-semibold group-hover:translate-x-0.5 transition-transform">&rarr;</span>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
 
           {/* More Like This (Nội dung tương tự) */}
           <div className="mt-10 border-t border-zinc-800 pt-6">
