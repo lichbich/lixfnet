@@ -207,6 +207,34 @@ export const MovieModal: React.FC = () => {
       }
     };
 
+    const handleBlur = () => {
+      if (!iframeRef.current?.contentWindow) return;
+      iframeRef.current.contentWindow.postMessage(
+        JSON.stringify({ event: 'command', func: 'pauseVideo', args: '' }),
+        '*'
+      );
+      iframeRef.current.contentWindow.postMessage(
+        JSON.stringify({ event: 'command', func: 'mute', args: '' }),
+        '*'
+      );
+    };
+
+    const handleFocus = () => {
+      if (!iframeRef.current?.contentWindow) return;
+      if (document.visibilityState === 'visible') {
+        iframeRef.current.contentWindow.postMessage(
+          JSON.stringify({ event: 'command', func: 'playVideo', args: '' }),
+          '*'
+        );
+        if (!isMuted) {
+          iframeRef.current.contentWindow.postMessage(
+            JSON.stringify({ event: 'command', func: 'unMute', args: '' }),
+            '*'
+          );
+        }
+      }
+    };
+
     const handleWindowMessage = (event: MessageEvent) => {
       try {
         const data = typeof event.data === 'string' ? JSON.parse(event.data) : event.data;
@@ -230,45 +258,21 @@ export const MovieModal: React.FC = () => {
               '*'
             );
           } catch {}
-        } else if (playerState === 5 || playerState === -1 || playerState === 2) {
-          // Recover if paused by browser autoplay policy
-          if (document.visibilityState === 'visible') {
-            try {
-              iframeRef.current?.contentWindow?.postMessage(
-                JSON.stringify({ event: 'command', func: 'mute', args: '' }),
-                '*'
-              );
-              iframeRef.current?.contentWindow?.postMessage(
-                JSON.stringify({ event: 'command', func: 'playVideo', args: '' }),
-                '*'
-              );
-              if (!isMuted) {
-                setTimeout(() => {
-                  try {
-                    iframeRef.current?.contentWindow?.postMessage(
-                      JSON.stringify({ event: 'command', func: 'unMute', args: '' }),
-                      '*'
-                    );
-                    iframeRef.current?.contentWindow?.postMessage(
-                      JSON.stringify({ event: 'command', func: 'setVolume', args: [100] }),
-                      '*'
-                    );
-                  } catch {}
-                }, 300);
-              }
-            } catch {}
-          }
         }
       } catch {}
     };
 
     document.addEventListener('visibilitychange', handleVisibility);
-    window.addEventListener('pagehide', handleVisibility);
+    window.addEventListener('blur', handleBlur);
+    window.addEventListener('focus', handleFocus);
+    window.addEventListener('pagehide', handleBlur);
     window.addEventListener('message', handleWindowMessage);
 
     return () => {
       document.removeEventListener('visibilitychange', handleVisibility);
-      window.removeEventListener('pagehide', handleVisibility);
+      window.removeEventListener('blur', handleBlur);
+      window.removeEventListener('focus', handleFocus);
+      window.removeEventListener('pagehide', handleBlur);
       window.removeEventListener('message', handleWindowMessage);
     };
   }, [isOpen, isTrailerPlaying, isMuted]);
@@ -513,7 +517,7 @@ export const MovieModal: React.FC = () => {
                 }`}
                 title={`${movie.title} Trailer`}
                 onLoad={() => {
-                  // Do NOT set isTrailerReady = true here. It must ONLY be set when playerState === 1
+                  setIsTrailerReady(true);
                   try {
                     iframeRef.current?.contentWindow?.postMessage(
                       JSON.stringify({ event: 'listening' }),
@@ -544,7 +548,7 @@ export const MovieModal: React.FC = () => {
 
                   const isAppActive =
                     typeof document !== 'undefined'
-                      ? document.visibilityState === 'visible'
+                      ? document.visibilityState === 'visible' && document.hasFocus()
                       : true;
                   if (!isAppActive) {
                     iframeRef.current?.contentWindow?.postMessage(
@@ -561,18 +565,14 @@ export const MovieModal: React.FC = () => {
                       '*'
                     );
                     if (!isMuted) {
-                      setTimeout(() => {
-                        try {
-                          iframeRef.current?.contentWindow?.postMessage(
-                            JSON.stringify({ event: 'command', func: 'unMute', args: '' }),
-                            '*'
-                          );
-                          iframeRef.current?.contentWindow?.postMessage(
-                            JSON.stringify({ event: 'command', func: 'setVolume', args: [100] }),
-                            '*'
-                          );
-                        } catch {}
-                      }, 200);
+                      iframeRef.current?.contentWindow?.postMessage(
+                        JSON.stringify({ event: 'command', func: 'unMute', args: '' }),
+                        '*'
+                      );
+                      iframeRef.current?.contentWindow?.postMessage(
+                        JSON.stringify({ event: 'command', func: 'setVolume', args: [100] }),
+                        '*'
+                      );
                     }
                   }
                 }}

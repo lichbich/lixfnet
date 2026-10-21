@@ -245,26 +245,18 @@ export const HoverPopoutCard: React.FC = () => {
           // Enforce playback so card trailer doesn't get stuck in paused state
           try {
             iframeRef.current?.contentWindow?.postMessage(
-              JSON.stringify({ event: 'command', func: 'mute', args: '' }),
-              '*'
-            );
-            iframeRef.current?.contentWindow?.postMessage(
               JSON.stringify({ event: 'command', func: 'playVideo', args: '' }),
               '*'
             );
             if (!isMuted) {
-              setTimeout(() => {
-                try {
-                  iframeRef.current?.contentWindow?.postMessage(
-                    JSON.stringify({ event: 'command', func: 'unMute', args: '' }),
-                    '*'
-                  );
-                  iframeRef.current?.contentWindow?.postMessage(
-                    JSON.stringify({ event: 'command', func: 'setVolume', args: [100] }),
-                    '*'
-                  );
-                } catch {}
-              }, 300);
+              iframeRef.current?.contentWindow?.postMessage(
+                JSON.stringify({ event: 'command', func: 'unMute', args: '' }),
+                '*'
+              );
+              iframeRef.current?.contentWindow?.postMessage(
+                JSON.stringify({ event: 'command', func: 'setVolume', args: [100] }),
+                '*'
+              );
             }
           } catch {}
         }
@@ -446,7 +438,7 @@ export const HoverPopoutCard: React.FC = () => {
               }`}
               title={`${activeMovie.title} Trailer`}
               onLoad={() => {
-                // Do NOT set isTrailerReady = true here. It must ONLY be set when playerState === 1
+                setIsTrailerReady(true);
                 try {
                   iframeRef.current?.contentWindow?.postMessage(
                     JSON.stringify({ event: 'listening' }),
