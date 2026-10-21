@@ -77,12 +77,40 @@ export const NetflixProvider: React.FC<{ children: React.ReactNode }> = ({ child
   const [currentEpisodeTitle, setCurrentEpisodeTitle] = useState<string | null>(null);
   const [myList, setMyList] = useState<Movie[]>([]);
   const [searchQuery, setSearchQuery] = useState<string>('');
-  const [isMuted, setIsMuted] = useState<boolean>(true);
+  // Audio Mute Preference (Default: Unmuted / Sound ON, stored per user)
+  const [isMuted, setIsMuted] = useState<boolean>(() => {
+    if (typeof window === 'undefined') return false;
+    try {
+      const saved = localStorage.getItem('netflix_muted_pref');
+      if (saved !== null) return saved === 'true';
+    } catch {}
+    return false; // Mặc định bật tiếng
+  });
   const [isLoadingDetail, setIsLoadingDetail] = useState<boolean>(false);
 
   // Auth & Account Management State
   const [currentUser, setCurrentUser] = useState<AuthUser | null>(null);
   const [isCreateUserModalOpen, setIsCreateUserModalOpen] = useState<boolean>(false);
+
+  // Sync user-specific mute preference when user logs in or switches
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    try {
+      const user = currentUser?.username;
+      const storageKey = user ? `netflix_muted_${user}` : 'netflix_muted_guest';
+      const userSaved = localStorage.getItem(storageKey);
+      if (userSaved !== null) {
+        setIsMuted(userSaved === 'true');
+      } else {
+        const globalSaved = localStorage.getItem('netflix_muted_pref');
+        if (globalSaved !== null) {
+          setIsMuted(globalSaved === 'true');
+        } else {
+          setIsMuted(false); // Mặc định bật tiếng
+        }
+      }
+    } catch {}
+  }, [currentUser?.username]);
 
   // Check existing session on mount
   useEffect(() => {
@@ -639,7 +667,16 @@ export const NetflixProvider: React.FC<{ children: React.ReactNode }> = ({ child
   }, [closeHoverPopoutNow, clearHoverTimers]);
 
   const toggleMute = useCallback(() => {
-    setIsMuted((prev) => !prev);
+    setIsMuted((prev) => {
+      const next = !prev;
+      try {
+        const user = currentUserRef.current?.username;
+        const storageKey = user ? `netflix_muted_${user}` : 'netflix_muted_guest';
+        localStorage.setItem(storageKey, String(next));
+        localStorage.setItem('netflix_muted_pref', String(next));
+      } catch {}
+      return next;
+    });
   }, []);
 
   return (

@@ -392,7 +392,7 @@ export const HeroBanner: React.FC<HeroBannerProps> = ({ movie, badgeText }) => {
                 <iframe
                   ref={iframeRef}
                   id="hero-trailer-iframe"
-                  src={`https://www.youtube-nocookie.com/embed/${trailerKey}?autoplay=1&mute=1&controls=0&modestbranding=1&rel=0&loop=1&playlist=${trailerKey}&playsinline=1&enablejsapi=1${
+                  src={`https://www.youtube-nocookie.com/embed/${trailerKey}?autoplay=1&mute=${isMuted ? 1 : 0}&controls=0&modestbranding=1&rel=0&loop=1&playlist=${trailerKey}&playsinline=1&enablejsapi=1${
                     typeof window !== 'undefined' && window.location.origin
                       ? `&origin=${encodeURIComponent(window.location.origin)}`
                       : ''

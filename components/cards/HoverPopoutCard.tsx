@@ -130,6 +130,21 @@ export const HoverPopoutCard: React.FC = () => {
     let isCancelled = false;
     const movieSlug = activeMovie.slug || activeMovie.id;
 
+    let hasKey = false;
+    let timerPassed = false;
+
+    const maybePlayTrailer = () => {
+      if (!isCancelled && hasKey && timerPassed) {
+        setIsTrailerPlaying(true);
+      }
+    };
+
+    // Total hover delay ~ 1.5s (380ms initial card hover delay + 1120ms popout timer)
+    trailerTimerRef.current = setTimeout(() => {
+      timerPassed = true;
+      maybePlayTrailer();
+    }, 1120);
+
     // Check client storage cache
     let cachedKey: string | null = null;
     try {
@@ -140,11 +155,8 @@ export const HoverPopoutCard: React.FC = () => {
 
     if (cachedKey && cachedKey !== 'none') {
       setTrailerKey(cachedKey);
-      trailerTimerRef.current = setTimeout(() => {
-        if (!isCancelled) {
-          setIsTrailerPlaying(true);
-        }
-      }, 1500);
+      hasKey = true;
+      maybePlayTrailer();
     } else {
       const qTitle = encodeURIComponent(activeMovie.title || '');
       const qSub = encodeURIComponent(activeMovie.subTitle || '');
@@ -169,12 +181,8 @@ export const HoverPopoutCard: React.FC = () => {
             } catch {
               // ignore
             }
-            // Only start playback after delay when trailer key is confirmed
-            trailerTimerRef.current = setTimeout(() => {
-              if (!isCancelled) {
-                setIsTrailerPlaying(true);
-              }
-            }, 1500);
+            hasKey = true;
+            maybePlayTrailer();
           } else {
             // Film has no trailer -> cleanly retain cover image without playing anything
             setTrailerKey(null);
@@ -363,7 +371,7 @@ export const HoverPopoutCard: React.FC = () => {
           <div className="absolute inset-0 w-full h-full overflow-hidden pointer-events-none">
             <iframe
               ref={iframeRef}
-              src={`https://www.youtube-nocookie.com/embed/${trailerKey}?autoplay=1&mute=1&controls=0&modestbranding=1&rel=0&loop=1&playlist=${trailerKey}&playsinline=1&enablejsapi=1${
+              src={`https://www.youtube-nocookie.com/embed/${trailerKey}?autoplay=1&mute=${isMuted ? 1 : 0}&controls=0&modestbranding=1&rel=0&loop=1&playlist=${trailerKey}&playsinline=1&enablejsapi=1${
                 typeof window !== 'undefined' && window.location.origin
                   ? `&origin=${encodeURIComponent(window.location.origin)}`
                   : ''

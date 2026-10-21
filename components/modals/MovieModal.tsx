@@ -28,12 +28,13 @@ export const MovieModal: React.FC = () => {
     isLoadingDetail,
     getWatchProgress,
     getEpisodeProgress,
+    isMuted,
+    toggleMute,
   } = useNetflix();
 
   const [activeServerIndex, setActiveServerIndex] = useState(0);
   const [selectedSeason, setSelectedSeason] = useState(1);
   const [isLiked, setIsLiked] = useState(false);
-  const [isModalMuted, setIsModalMuted] = useState(true);
   const [similarMovies, setSimilarMovies] = useState<Movie[]>([]);
   const [isLoadingSimilar, setIsLoadingSimilar] = useState(false);
   const [episodeRangeIndex, setEpisodeRangeIndex] = useState<number | 'all'>(0);
@@ -73,7 +74,7 @@ export const MovieModal: React.FC = () => {
     }
   }, [selectedMovie]);
 
-  // Fetch trailer when modal opens or displayedMovie changes
+  // Fetch and start trailer swiftly when modal opens
   useEffect(() => {
     setIsTrailerPlaying(false);
     setIsTrailerReady(false);
@@ -90,6 +91,16 @@ export const MovieModal: React.FC = () => {
     let isCancelled = false;
     const movieSlug = displayedMovie.slug || displayedMovie.id;
 
+    // Start trailer swiftly after 800ms of opening modal
+    const startTrailer = () => {
+      if (idleTimerRef.current) clearTimeout(idleTimerRef.current);
+      idleTimerRef.current = setTimeout(() => {
+        if (!isCancelled) {
+          setIsTrailerPlaying(true);
+        }
+      }, 800);
+    };
+
     let cachedKey: string | null = null;
     try {
       cachedKey = sessionStorage.getItem(`netlix_trailer_${movieSlug}`);
@@ -99,6 +110,7 @@ export const MovieModal: React.FC = () => {
 
     if (cachedKey && cachedKey !== 'none') {
       setTrailerKey(cachedKey);
+      startTrailer();
     } else {
       const qTitle = encodeURIComponent(displayedMovie.title || '');
       const qSub = encodeURIComponent(displayedMovie.subTitle || '');
@@ -123,8 +135,11 @@ export const MovieModal: React.FC = () => {
             } catch {
               // ignore
             }
+            startTrailer();
           } else {
             setTrailerKey(null);
+            setIsTrailerPlaying(false);
+            setIsTrailerReady(false);
           }
         })
         .catch(() => {});
@@ -139,55 +154,11 @@ export const MovieModal: React.FC = () => {
     };
   }, [displayedMovie?.id, isOpen]);
 
-  // 3-second idle detector: if user is idle for 3s after opening, start playing trailer
-  const resetIdleTimer = useCallback(() => {
-    if (isTrailerPlaying) return;
-
-    if (idleTimerRef.current) {
-      clearTimeout(idleTimerRef.current);
-      idleTimerRef.current = null;
-    }
-
-    idleTimerRef.current = setTimeout(() => {
-      setIsTrailerPlaying(true);
-    }, 3000);
-  }, [isTrailerPlaying]);
-
-  useEffect(() => {
-    if (!isOpen || !displayedMovie || isTrailerPlaying) return;
-
-    // Start initial 3s timer on modal open
-    resetIdleTimer();
-
-    // Reset 3s idle countdown whenever user interacts inside modal
-    const handleUserActivity = () => {
-      resetIdleTimer();
-    };
-
-    window.addEventListener('mousemove', handleUserActivity, { passive: true });
-    window.addEventListener('scroll', handleUserActivity, { passive: true });
-    window.addEventListener('keydown', handleUserActivity, { passive: true });
-    window.addEventListener('click', handleUserActivity, { passive: true });
-    window.addEventListener('touchstart', handleUserActivity, { passive: true });
-
-    return () => {
-      if (idleTimerRef.current) {
-        clearTimeout(idleTimerRef.current);
-        idleTimerRef.current = null;
-      }
-      window.removeEventListener('mousemove', handleUserActivity);
-      window.removeEventListener('scroll', handleUserActivity);
-      window.removeEventListener('keydown', handleUserActivity);
-      window.removeEventListener('click', handleUserActivity);
-      window.removeEventListener('touchstart', handleUserActivity);
-    };
-  }, [isOpen, displayedMovie?.id, isTrailerPlaying, resetIdleTimer]);
-
   // Sync mute/unmute state with modal trailer iframe
   useEffect(() => {
     if (iframeRef.current && isTrailerPlaying && trailerKey) {
       try {
-        const action = isModalMuted ? 'mute' : 'unMute';
+        const action = isMuted ? 'mute' : 'unMute';
         iframeRef.current.contentWindow?.postMessage(
           JSON.stringify({ event: 'command', func: action, args: '' }),
           '*'
@@ -200,7 +171,7 @@ export const MovieModal: React.FC = () => {
         // ignore
       }
     }
-  }, [isModalMuted, isTrailerPlaying, trailerKey]);
+  }, [isMuted, isTrailerPlaying, trailerKey]);
 
   // Pause modal trailer when tab is hidden or user switches app, resume on return
   useEffect(() => {
@@ -223,7 +194,7 @@ export const MovieModal: React.FC = () => {
           JSON.stringify({ event: 'command', func: 'playVideo', args: '' }),
           '*'
         );
-        if (!isModalMuted) {
+        if (!isMuted) {
           iframeRef.current.contentWindow.postMessage(
             JSON.stringify({ event: 'command', func: 'unMute', args: '' }),
             '*'
@@ -251,7 +222,7 @@ export const MovieModal: React.FC = () => {
           JSON.stringify({ event: 'command', func: 'playVideo', args: '' }),
           '*'
         );
-        if (!isModalMuted) {
+        if (!isMuted) {
           iframeRef.current.contentWindow.postMessage(
             JSON.stringify({ event: 'command', func: 'unMute', args: '' }),
             '*'
@@ -271,7 +242,7 @@ export const MovieModal: React.FC = () => {
       window.removeEventListener('focus', handleFocus);
       window.removeEventListener('pagehide', handleBlur);
     };
-  }, [isOpen, isTrailerPlaying, isModalMuted]);
+  }, [isOpen, isTrailerPlaying, isMuted]);
 
   // Graceful close handler with exit animation and cleanup
   const handleClose = useCallback(() => {
@@ -473,7 +444,7 @@ export const MovieModal: React.FC = () => {
             <div className="absolute inset-0 w-full h-full overflow-hidden pointer-events-none">
               <iframe
                 ref={iframeRef}
-                src={`https://www.youtube-nocookie.com/embed/${trailerKey}?autoplay=1&mute=1&controls=0&modestbranding=1&rel=0&loop=1&playlist=${trailerKey}&playsinline=1&enablejsapi=1${
+                src={`https://www.youtube-nocookie.com/embed/${trailerKey}?autoplay=1&mute=${isMuted ? 1 : 0}&controls=0&modestbranding=1&rel=0&loop=1&playlist=${trailerKey}&playsinline=1&enablejsapi=1${
                   typeof window !== 'undefined' && window.location.origin
                     ? `&origin=${encodeURIComponent(window.location.origin)}`
                     : ''
@@ -501,7 +472,7 @@ export const MovieModal: React.FC = () => {
                       JSON.stringify({ event: 'command', func: 'mute', args: '' }),
                       '*'
                     );
-                  } else if (!isModalMuted) {
+                  } else if (!isMuted) {
                     iframeRef.current?.contentWindow?.postMessage(
                       JSON.stringify({ event: 'command', func: 'unMute', args: '' }),
                       '*'
@@ -581,11 +552,11 @@ export const MovieModal: React.FC = () => {
 
             {/* Mute button */}
             <button
-              onClick={() => setIsModalMuted(!isModalMuted)}
-              aria-label="Âm thanh"
-              className="w-10 h-10 rounded-full border border-white/30 bg-zinc-900/60 hover:bg-zinc-900 text-white flex items-center justify-center transition"
+              onClick={toggleMute}
+              aria-label={isMuted ? 'Bật âm thanh' : 'Tắt âm thanh'}
+              className="w-10 h-10 rounded-full border border-white/30 bg-zinc-900/60 hover:bg-zinc-900 text-white flex items-center justify-center transition cursor-pointer active:scale-95 shadow-md"
             >
-              {isModalMuted ? <VolumeX className="w-5 h-5" /> : <Volume2 className="w-5 h-5" />}
+              {isMuted ? <VolumeX className="w-5 h-5" /> : <Volume2 className="w-5 h-5 text-white" />}
             </button>
           </div>
         </div>
