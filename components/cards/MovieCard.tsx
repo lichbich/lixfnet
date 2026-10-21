@@ -13,7 +13,7 @@ interface MovieCardProps {
   className?: string;
 }
 
-export const MovieCard: React.FC<MovieCardProps> = ({
+export const MovieCard = React.memo<MovieCardProps>(({
   movie,
   variant = 'landscape',
   fillWidth = false,
@@ -62,7 +62,7 @@ export const MovieCard: React.FC<MovieCardProps> = ({
       onClick={() => openModal(movie)}
       onMouseEnter={handleMouseEnter}
       onMouseLeave={handleMouseLeave}
-      className={`relative flex-shrink-0 rounded-md sm:rounded-lg overflow-hidden bg-zinc-800 shadow-md border border-white/5 cursor-pointer group select-none transition-all duration-300 hover:border-white/30 hover:shadow-2xl hover:scale-[1.03] hover:z-20 ${sizeClasses} ${className}`}
+      className={`relative flex-shrink-0 rounded-md sm:rounded-lg overflow-hidden bg-zinc-800 shadow-md border border-white/5 cursor-pointer group select-none transition-[border-color,box-shadow] duration-200 ease-out hover:border-white/40 hover:shadow-2xl ${sizeClasses} ${className}`}
     >
       {/* Smart Adaptive Ambient Blur Layer */}
       <div
@@ -75,7 +75,7 @@ export const MovieCard: React.FC<MovieCardProps> = ({
         src={mainImage}
         alt={movie.title}
         loading="lazy"
-        className="relative w-full h-full object-cover object-top group-hover:scale-103 transition-transform duration-700 ease-out"
+        className="relative w-full h-full object-cover object-top group-hover:scale-105 transition-transform duration-500 ease-out will-change-transform"
       />
 
       {/* Top 10 badge */}
@@ -191,4 +191,6 @@ export const MovieCard: React.FC<MovieCardProps> = ({
       </div>
     </div>
   );
-};
+});
+
+MovieCard.displayName = 'MovieCard';

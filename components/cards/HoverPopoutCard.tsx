@@ -327,9 +327,10 @@ export const HoverPopoutCard: React.FC = () => {
   const inList = isInMyList(activeMovie.id);
   const watchProgress = getWatchProgress(activeMovie.slug || activeMovie.id);
 
-  // Responsive width calculation
+  // Responsive width calculation: blooms out smoothly and proportionally to the base card
+  const targetWidth = Math.round(activeRect.width * 1.16);
   const popoutWidth = typeof window !== 'undefined'
-    ? Math.min(365, window.innerWidth - 32)
+    ? Math.min(Math.max(360, targetWidth), window.innerWidth - 32)
     : 350;
 
   // Horizontal position with edge boundary detection

@@ -570,8 +570,9 @@ export const NetflixProvider: React.FC<{ children: React.ReactNode }> = ({ child
     const startScrollY = typeof window !== 'undefined' ? window.scrollY : 0;
     const startScrollX = typeof window !== 'undefined' ? window.scrollX : 0;
 
-    // Transition with 120ms if another card is already popped out; otherwise 380ms deliberate hover
-    const delay = currentActive ? 120 : 380;
+    // Smooth deliberate hover delay (300ms when switching between cards; 420ms for initial hover)
+    // Prevents jitter and rapid unmount/mount thrashing when moving mouse across grid cards
+    const delay = currentActive ? 300 : 420;
 
     hoverOpenTimerRef.current = setTimeout(() => {
       // Abort if user scrolled or moved while waiting for delay
