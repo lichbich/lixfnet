@@ -639,81 +639,263 @@ export function isChineseMovie(movie?: Movie | NguonCItem | null, chinaSlugSet?:
   return false;
 }
 
-function rankSearchItem(item: NguonCItem, query: string): number {
+const TMDB_API_KEY =
+  process.env.TMDB_API_KEY || '58dba4066f4f36e49e5e769304442088';
+
+export interface SearchMoviesResponse {
+  movies: Movie[];
+  totalPages: number;
+  currentPage: number;
+  totalItems?: number;
+}
+
+interface TMDBSearchCandidate {
+  id: number;
+  title: string;
+  original_title?: string;
+  vote_average: number;
+  vote_count: number;
+  release_date?: string;
+  score: number;
+}
+
+// In-memory cache for direct TMDB movie lookups across searches
+const tmdbMovieScoreCache = new Map<string, TMDBSearchCandidate>();
+
+function cleanSearchTitle(str?: string): string {
+  if (!str) return '';
+  return normalizeSearchText(str)
+    .replace(/^(phim|movie|batman\s*\d*|nguoi\s*doi\s*\d*|nguoi\s*nhen\s*\d*)\s*[:\-]\s*/i, '')
+    .trim();
+}
+
+/**
+ * High-confidence matcher to link an NguonC item with a TMDB movie candidate.
+ * Strictly avoids false positives caused by common 1-2 word franchise names like 'Người Dơi' or 'Batman'.
+ */
+function isHighConfidenceMatch(item: NguonCItem, candidate: any): boolean {
+  const normItemName = normalizeSearchText(item.name);
+  const normItemOrig = normalizeSearchText(item.original_name);
+  const cleanItemName = cleanSearchTitle(item.name);
+  const cleanItemOrig = cleanSearchTitle(item.original_name);
+
+  const normCandTitle = normalizeSearchText(candidate.title || candidate.name);
+  const normCandOrig = normalizeSearchText(candidate.original_title || candidate.original_name);
+  const cleanCandTitle = cleanSearchTitle(candidate.title || candidate.name);
+  const cleanCandOrig = cleanSearchTitle(candidate.original_title || candidate.original_name);
+
+  // 1. Exact match on original English titles (e.g. 'The Dark Knight Rises' === 'The Dark Knight Rises')
+  if (normItemOrig && normCandOrig && normItemOrig === normCandOrig) return true;
+  if (cleanItemOrig && cleanCandOrig && cleanItemOrig === cleanCandOrig) return true;
+
+  // 2. Exact match on Vietnamese titles
+  if (normItemName && normCandTitle && normItemName === normCandTitle) return true;
+  if (cleanItemName && cleanCandTitle && cleanItemName === cleanCandTitle) return true;
+
+  // 3. Cross exact match (sometimes English title is stored in Vietnamese name field or vice versa)
+  if (normItemName && normCandOrig && normItemName === normCandOrig) return true;
+  if (normItemOrig && normCandTitle && normItemOrig === normCandTitle) return true;
+
+  // 4. Release year proximity check (within 1 year) with substantial title phrase matching
+  const itemYear = typeof item.year === 'number' ? item.year : parseInt(item.year || '0', 10);
+  const candYear = parseInt(((candidate.release_date || candidate.first_air_date || '')).slice(0, 4), 10);
+
+  if (itemYear && candYear && Math.abs(itemYear - candYear) <= 1) {
+    if (cleanItemName && cleanCandTitle && (cleanItemName.includes(cleanCandTitle) || cleanCandTitle.includes(cleanItemName))) {
+      // Must be a distinct phrase, not a generic 1-2 word short name
+      if (cleanCandTitle.length > 8 && cleanItemName.length > 8) return true;
+    }
+    if (cleanItemOrig && cleanCandOrig && (cleanItemOrig.includes(cleanCandOrig) || cleanCandOrig.includes(cleanItemOrig))) {
+      if (cleanCandOrig.length > 8 && cleanItemOrig.length > 8) return true;
+    }
+  }
+
+  return false;
+}
+
+function rankSearchItem(
+  item: NguonCItem,
+  query: string,
+  tmdbCandidate?: TMDBSearchCandidate
+): number {
   const qNorm = normalizeSearchText(query);
   const nameNorm = normalizeSearchText(item.name);
   const origNorm = normalizeSearchText(item.original_name);
   let score = 0;
 
-  // 1. Exact match
+  // 1. Relevance: Exact or strong containment of query
   if (nameNorm === qNorm || origNorm === qNorm) {
-    score += 200;
-  }
-
-  // 2. Starts with query (e.g. 'Lanterns' starts with 'Lantern')
-  if (nameNorm.startsWith(qNorm) || origNorm.startsWith(qNorm)) {
-    score += 120;
-  }
-
-  // 3. Word boundary match
-  const words = `${nameNorm} ${origNorm}`.split(/\s+/);
-  if (words.some((w) => w.startsWith(qNorm))) {
+    score += 150;
+  } else if (nameNorm.includes(qNorm) || origNorm.includes(qNorm)) {
     score += 80;
+  } else {
+    const qWords = qNorm.split(' ').filter(Boolean);
+    const combined = `${nameNorm} ${origNorm}`;
+    if (qWords.length > 0 && qWords.every((w) => combined.includes(w))) {
+      score += 50;
+    } else {
+      score += 20; // Associated franchise or collection match
+    }
   }
 
-  // 4. Contains anywhere
-  if (nameNorm.includes(qNorm) || origNorm.includes(qNorm)) {
-    score += 40;
+  // 2. TMDB Quality & Acclaim Booster (Dominant factor for people looking for great movies)
+  // Quality Score = vote_average * log10(vote_count + 1)
+  // Legendary films (e.g. The Dark Knight 8.5 with 37k votes -> 38.99 * 12 = +468 pts)
+  // Blockbusters (e.g. The Dark Knight Rises 7.8 with 25k votes -> 34.3 * 12 = +412 pts)
+  // Acclaimed animation (e.g. Under the Red Hood 7.8 with 1.8k votes -> 25.3 * 12 = +304 pts)
+  // Minor cartoons (e.g. 6.7 with 200 votes -> 15.4 * 12 = +185 pts)
+  // Unrated or obscure films -> +0 pts
+  if (tmdbCandidate && tmdbCandidate.score > 0) {
+    score += Math.round(tmdbCandidate.score * 12);
   }
 
-  // 5. Recency boost (hot new releases like 2026 / 2025 rank higher)
+  // 3. Modest recency tiebreaker (without penalizing classics)
   const year = typeof item.year === 'number' ? item.year : parseInt(item.year || '2020', 10);
-  if (year >= 2026) score += 50;
-  else if (year >= 2025) score += 40;
-  else if (year >= 2024) score += 30;
-  else if (year >= 2022) score += 15;
+  if (year >= 2024) score += 10;
+  else if (year >= 2020) score += 5;
 
   return score;
 }
 
 /**
- * Search movies by keyword with multi-page aggregation and smart relevance ranking
+ * Search movies by keyword with TMDB Masterpiece Booster, multi-page aggregation, and smart relevance ranking.
  */
-export async function searchMovies(keyword: string, page = 1): Promise<Movie[]> {
+export async function searchMoviesWithPagination(
+  keyword: string,
+  page = 1
+): Promise<SearchMoviesResponse> {
   const clean = keyword?.trim();
-  if (!clean) return [];
+  if (!clean) return { movies: [], totalPages: 1, currentPage: 1, totalItems: 0 };
 
   try {
-    const res = await fetch(`${API_BASE_URL}/films/search?keyword=${encodeURIComponent(clean)}&page=${page}`);
+    // Determine NguonC pages to batch (5 pages per batch to give comprehensive results immediately)
+    const BATCH_SIZE = 5;
+    const startNguonCPage = (page - 1) * BATCH_SIZE + 1;
+
+    // 1. Fetch initial page of this batch from NguonC
+    const res = await fetch(`${API_BASE_URL}/films/search?keyword=${encodeURIComponent(clean)}&page=${startNguonCPage}`);
     if (!res.ok) throw new Error(`HTTP error! status: ${res.status}`);
     const data: NguonCListResponse = await res.json();
 
     let allItems: NguonCItem[] = data.items || [];
-    const totalPages = data.paginate?.total_page || 1;
+    const totalNguonCPages = data.paginate?.total_page || 1;
+    const totalItems = data.paginate?.total_items || allItems.length;
 
-    // When on page 1, aggregate up to 3 pages in parallel so that relevant & recent movies
-    // located on page 2 or 3 (like "Lực Lượng Lanterns") are not missed
-    if (page === 1 && totalPages > 1) {
-      const maxPages = Math.min(totalPages, 3);
-      const extraPromises: Promise<NguonCListResponse>[] = [];
+    // Concurrently fetch the remaining pages in this batch
+    const extraPromises: Promise<NguonCListResponse>[] = [];
+    const endNguonCPage = Math.min(startNguonCPage + BATCH_SIZE - 1, totalNguonCPages);
 
-      for (let p = 2; p <= maxPages; p++) {
-        extraPromises.push(
-          fetch(`${API_BASE_URL}/films/search?keyword=${encodeURIComponent(clean)}&page=${p}`)
-            .then((r) => (r.ok ? r.json() : { items: [] }))
-            .catch(() => ({ items: [] }))
-        );
+    for (let p = startNguonCPage + 1; p <= endNguonCPage; p++) {
+      extraPromises.push(
+        fetch(`${API_BASE_URL}/films/search?keyword=${encodeURIComponent(clean)}&page=${p}`)
+          .then((r) => (r.ok ? r.json() : { items: [] }))
+          .catch(() => ({ items: [] }))
+      );
+    }
+
+    // 2. Concurrently fetch TMDB movies, TV series, and franchise collections
+    const tmdbMoviePromises = [1, 2, 3].map((p) =>
+      fetch(
+        `https://api.themoviedb.org/3/search/movie?api_key=${TMDB_API_KEY}&language=vi-VN&query=${encodeURIComponent(clean)}&page=${p}`
+      )
+        .then((r) => (r.ok ? r.json() : { results: [] }))
+        .catch(() => ({ results: [] }))
+    );
+
+    const tmdbTvPromise = fetch(
+      `https://api.themoviedb.org/3/search/tv?api_key=${TMDB_API_KEY}&language=vi-VN&query=${encodeURIComponent(clean)}&page=1`
+    )
+      .then((r) => (r.ok ? r.json() : { results: [] }))
+      .catch(() => ({ results: [] }));
+
+    const tmdbColPromise = fetch(
+      `https://api.themoviedb.org/3/search/collection?api_key=${TMDB_API_KEY}&language=vi-VN&query=${encodeURIComponent(clean)}`
+    )
+      .then((r) => (r.ok ? r.json() : { results: [] }))
+      .catch(() => ({ results: [] }));
+
+    const [extraResults, tmdbMovieResults, tmdbTvResult, tmdbColResult] = await Promise.all([
+      Promise.all(extraPromises),
+      Promise.all(tmdbMoviePromises),
+      tmdbTvPromise,
+      tmdbColPromise,
+    ]);
+
+    for (const resPage of extraResults) {
+      if (resPage.items && Array.isArray(resPage.items)) {
+        allItems.push(...resPage.items);
       }
+    }
 
-      const extraResults = await Promise.all(extraPromises);
-      for (const resPage of extraResults) {
-        if (resPage.items && Array.isArray(resPage.items)) {
-          allItems.push(...resPage.items);
+    // 3. Aggregate TMDB candidates (movies, series, and collection parts)
+    const tmdbCandidatesRaw: any[] = [];
+    for (const resP of tmdbMovieResults) {
+      if (resP.results && Array.isArray(resP.results)) {
+        tmdbCandidatesRaw.push(...resP.results);
+      }
+    }
+    if (tmdbTvResult.results && Array.isArray(tmdbTvResult.results)) {
+      tmdbCandidatesRaw.push(...tmdbTvResult.results);
+    }
+
+    // Expand top franchise collections (e.g. The Dark Knight collection -> The Dark Knight, The Dark Knight Rises)
+    if (tmdbColResult.results && tmdbColResult.results.length > 0) {
+      const topCols = tmdbColResult.results.slice(0, 15);
+      const colDetails = await Promise.all(
+        topCols.map((c: any) =>
+          fetch(`https://api.themoviedb.org/3/collection/${c.id}?api_key=${TMDB_API_KEY}&language=vi-VN`)
+            .then((r) => (r.ok ? r.json() : { parts: [] }))
+            .catch(() => ({ parts: [] }))
+        )
+      );
+      for (const cd of colDetails) {
+        if (cd.parts && Array.isArray(cd.parts)) {
+          tmdbCandidatesRaw.push(...cd.parts);
         }
       }
     }
 
-    // Deduplicate items by slug / name
+    const tmdbCandidates: TMDBSearchCandidate[] = tmdbCandidatesRaw
+      .map((item) => {
+        const title = item.title || item.name || '';
+        const original_title = item.original_title || item.original_name || '';
+        const vote_average = typeof item.vote_average === 'number' ? item.vote_average : 0;
+        const vote_count = typeof item.vote_count === 'number' ? item.vote_count : 0;
+        const score = vote_average * Math.log10(vote_count + 1);
+        return {
+          id: item.id,
+          title,
+          original_title,
+          vote_average,
+          vote_count,
+          release_date: item.release_date || item.first_air_date || '',
+          score,
+        };
+      })
+      .filter((c) => c.title && c.vote_count >= 20 && c.vote_average >= 6.0)
+      .sort((a, b) => b.score - a.score);
+
+    // 4. Identify top TMDB masterpieces that might be buried on later NguonC pages (e.g. Spirited Away, The Dark Knight)
+    const topMasterpieces = tmdbCandidates.slice(0, 6);
+    const missingMasterpieces = topMasterpieces.filter((tm) => {
+      return !allItems.some((item) => isHighConfidenceMatch(item, tm));
+    });
+
+    if (missingMasterpieces.length > 0) {
+      const pinpointPromises = missingMasterpieces.map((m) =>
+        fetch(`${API_BASE_URL}/films/search?keyword=${encodeURIComponent(m.title || m.original_title || '')}&page=1`)
+          .then((r) => (r.ok ? r.json() : { items: [] }))
+          .catch(() => ({ items: [] }))
+      );
+      const pinpointResults = await Promise.all(pinpointPromises);
+      for (const pRes of pinpointResults) {
+        if (pRes.items && Array.isArray(pRes.items)) {
+          allItems.push(...pRes.items);
+        }
+      }
+    }
+
+    // 5. Deduplicate items by slug
     const seenSlugs = new Set<string>();
     const uniqueItems: NguonCItem[] = [];
     for (const item of allItems) {
@@ -724,14 +906,106 @@ export async function searchMovies(keyword: string, page = 1): Promise<Movie[]> 
       }
     }
 
-    // Rank items by relevance and release year
-    uniqueItems.sort((a, b) => rankSearchItem(b, clean) - rankSearchItem(a, clean));
+    // 6. Enrich every item with TMDB score (matching against candidate pool, or cached direct lookup)
+    const itemScoreMap = new Map<string, TMDBSearchCandidate>();
+    const missingItems: NguonCItem[] = [];
 
-    return uniqueItems.map((item) => mapNguonCToMovie(item));
+    for (const item of uniqueItems) {
+      // Check cache first
+      const cacheKey = `${item.slug}_${item.original_name || item.name}`;
+      if (tmdbMovieScoreCache.has(cacheKey)) {
+        itemScoreMap.set(item.slug, tmdbMovieScoreCache.get(cacheKey)!);
+        continue;
+      }
+
+      // Check candidate pool
+      const matched = tmdbCandidates.find((c) => isHighConfidenceMatch(item, c));
+      if (matched) {
+        itemScoreMap.set(item.slug, matched);
+        tmdbMovieScoreCache.set(cacheKey, matched);
+      } else {
+        missingItems.push(item);
+      }
+    }
+
+    // Direct parallel TMDB lookup for items that didn't match candidate pool
+    if (missingItems.length > 0) {
+      await Promise.all(
+        missingItems.map(async (item) => {
+          const cacheKey = `${item.slug}_${item.original_name || item.name}`;
+          const q = item.original_name || item.name;
+          try {
+            const resTmdb = await fetch(
+              `https://api.themoviedb.org/3/search/movie?api_key=${TMDB_API_KEY}&language=vi-VN&query=${encodeURIComponent(q)}`
+            ).then((r) => (r.ok ? r.json() : { results: [] }));
+
+            const best = resTmdb.results?.[0];
+            if (best) {
+              const vAvg = typeof best.vote_average === 'number' ? best.vote_average : 0;
+              const vCnt = typeof best.vote_count === 'number' ? best.vote_count : 0;
+              const candidateInfo: TMDBSearchCandidate = {
+                id: best.id,
+                title: best.title || '',
+                original_title: best.original_title || '',
+                vote_average: vAvg,
+                vote_count: vCnt,
+                release_date: best.release_date || '',
+                score: vAvg * Math.log10(vCnt + 1),
+              };
+              itemScoreMap.set(item.slug, candidateInfo);
+              tmdbMovieScoreCache.set(cacheKey, candidateInfo);
+            }
+          } catch {}
+        })
+      );
+    }
+
+    // 7. Rank items by relevance and TMDB quality score
+    uniqueItems.sort((a, b) => {
+      const scoreA = rankSearchItem(a, clean, itemScoreMap.get(a.slug));
+      const scoreB = rankSearchItem(b, clean, itemScoreMap.get(b.slug));
+      return scoreB - scoreA;
+    });
+
+    // 8. Map to Movie objects with enriched TMDB match info and accurate match rates
+    const movies = uniqueItems.map((item) => {
+      const movie = mapNguonCToMovie(item);
+      const matchedTmdb = itemScoreMap.get(item.slug);
+
+      if (matchedTmdb) {
+        const vote = matchedTmdb.vote_average;
+        movie.matchRate = Math.min(99, Math.max(88, Math.round(vote * 10 + 5)));
+        movie.tmdb = {
+          id: matchedTmdb.id,
+          type: 'movie',
+          voteAverage: matchedTmdb.vote_average,
+          voteCount: matchedTmdb.vote_count,
+        };
+      }
+      return movie;
+    });
+
+    // Calculate total pages for client (each batch represents BATCH_SIZE NguonC pages)
+    const clientTotalPages = Math.ceil(totalNguonCPages / BATCH_SIZE);
+
+    return {
+      movies,
+      totalPages: clientTotalPages,
+      currentPage: page,
+      totalItems,
+    };
   } catch (error) {
     console.error('Error searching movies:', error);
-    return [];
+    return { movies: [], totalPages: 1, currentPage: 1, totalItems: 0 };
   }
+}
+
+/**
+ * Search movies by keyword with multi-page aggregation and smart relevance ranking
+ */
+export async function searchMovies(keyword: string, page = 1): Promise<Movie[]> {
+  const res = await searchMoviesWithPagination(keyword, page);
+  return res.movies;
 }
 
 /**

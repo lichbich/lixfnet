@@ -72,6 +72,8 @@ export interface Movie {
     type?: string;
     season?: number | null;
     url?: string;
+    voteAverage?: number;
+    voteCount?: number;
   };
   imdb?: {
     id: string;
