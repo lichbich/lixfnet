@@ -71,6 +71,14 @@ export function getFirebaseAdmin(): { app: App; db: Database } {
     );
   }
 
+  // Ensure private key newlines are properly normalized
+  if (serviceAccount.private_key && typeof serviceAccount.private_key === 'string') {
+    serviceAccount.private_key = serviceAccount.private_key.replace(/\\n/g, '\n');
+  }
+  if (serviceAccount.privateKey && typeof serviceAccount.privateKey === 'string') {
+    serviceAccount.privateKey = serviceAccount.privateKey.replace(/\\n/g, '\n');
+  }
+
   const databaseURL =
     process.env.FIREBASE_DATABASE_URL ||
     `https://${serviceAccount.project_id || serviceAccount.projectId}-default-rtdb.firebaseio.com`;
