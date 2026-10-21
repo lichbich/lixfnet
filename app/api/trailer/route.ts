@@ -20,6 +20,7 @@ interface TMDBVideo {
   name: string;
   official?: boolean;
   published_at?: string;
+  size?: number; // 2160, 1080, 720, 480, 360
 }
 
 interface TMDBSearchItem {
@@ -88,23 +89,53 @@ async function fetchVideosForTMDBItem(
 }
 
 /**
- * Extract and sort YouTube trailers from TMDB raw videos array
+ * Extract and sort YouTube trailers from TMDB raw videos array,
+ * strictly prioritizing Full HD 1080p, 4K UHD, and Official Studio Trailers.
  */
 function extractTrailers(rawVideos: TMDBVideo[]): { key: string; backups: string[] } | null {
   const ytVideos = rawVideos.filter((v) => v.site === 'YouTube' && v.key);
   if (ytVideos.length === 0) return null;
 
-  const trailers = ytVideos.filter((v) => v.type === 'Trailer');
-  const teasers = ytVideos.filter((v) => v.type === 'Teaser');
-  const others = ytVideos.filter((v) => v.type !== 'Trailer' && v.type !== 'Teaser');
+  // Quality scoring algorithm:
+  // - Resolution: 2160 (4K) & 1080 (Full HD) get highest priority (+120), 720p (+60), 480p (+15)
+  // - Official studio releases get +60 boost
+  // - True "Trailer" gets +50, "Teaser" gets +25, "Clip" gets +5
+  // - Title keywords ("1080p", "4K", "Official", "Main Trailer") get additional boosts
+  // - Published date adds minor tiebreaker
+  const scoreVideo = (v: TMDBVideo) => {
+    let score = 0;
+    const size = typeof v.size === 'number' ? v.size : 0;
+    if (size >= 1080) {
+      score += 120; // 1080p Full HD / 2160p 4K UHD
+    } else if (size >= 720) {
+      score += 60;  // 720p HD
+    } else if (size >= 480) {
+      score += 15;
+    }
 
-  const sortByDate = (a: TMDBVideo, b: TMDBVideo) =>
-    new Date(b.published_at || 0).getTime() - new Date(a.published_at || 0).getTime();
+    if (v.official) score += 60;
 
-  trailers.sort(sortByDate);
-  teasers.sort(sortByDate);
+    if (v.type === 'Trailer') score += 50;
+    else if (v.type === 'Teaser') score += 25;
+    else score += 5;
 
-  const allKeys = [...trailers, ...teasers, ...others].map((v) => v.key);
+    const lowerName = (v.name || '').toLowerCase();
+    if (lowerName.includes('official') || lowerName.includes('chính thức')) score += 30;
+    if (lowerName.includes('1080') || lowerName.includes('4k') || lowerName.includes('uhd') || lowerName.includes('full hd')) score += 25;
+    if (lowerName.includes('main trailer') || lowerName.includes('trailer 1')) score += 15;
+
+    if (v.published_at) {
+      const ts = new Date(v.published_at).getTime();
+      if (!isNaN(ts)) {
+        score += Math.min(10, (ts / 1e12) * 5);
+      }
+    }
+
+    return score;
+  };
+
+  const sorted = [...ytVideos].sort((a, b) => scoreVideo(b) - scoreVideo(a));
+  const allKeys = sorted.map((v) => v.key);
   if (allKeys.length === 0) return null;
 
   return {

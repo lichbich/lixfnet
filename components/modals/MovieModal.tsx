@@ -207,44 +207,69 @@ export const MovieModal: React.FC = () => {
       }
     };
 
-    const handleBlur = () => {
-      if (!iframeRef.current?.contentWindow) return;
-      iframeRef.current.contentWindow.postMessage(
-        JSON.stringify({ event: 'command', func: 'pauseVideo', args: '' }),
-        '*'
-      );
-      iframeRef.current.contentWindow.postMessage(
-        JSON.stringify({ event: 'command', func: 'mute', args: '' }),
-        '*'
-      );
-    };
+    const handleWindowMessage = (event: MessageEvent) => {
+      try {
+        const data = typeof event.data === 'string' ? JSON.parse(event.data) : event.data;
+        if (!data) return;
+        const playerState =
+          data?.event === 'onStateChange' && typeof data?.info === 'number'
+            ? data.info
+            : typeof data?.info?.playerState === 'number'
+            ? data.info.playerState
+            : undefined;
 
-    const handleFocus = () => {
-      if (!iframeRef.current?.contentWindow) return;
-      if (document.visibilityState === 'visible') {
-        iframeRef.current.contentWindow.postMessage(
-          JSON.stringify({ event: 'command', func: 'playVideo', args: '' }),
-          '*'
-        );
-        if (!isMuted) {
-          iframeRef.current.contentWindow.postMessage(
-            JSON.stringify({ event: 'command', func: 'unMute', args: '' }),
-            '*'
-          );
+        if (playerState === 1) {
+          setIsTrailerReady(true);
+          try {
+            iframeRef.current?.contentWindow?.postMessage(
+              JSON.stringify({ event: 'command', func: 'setPlaybackQuality', args: ['hd1080'] }),
+              '*'
+            );
+            iframeRef.current?.contentWindow?.postMessage(
+              JSON.stringify({ event: 'command', func: 'setPlaybackQualityRange', args: [['hd1080', 'highres']] }),
+              '*'
+            );
+          } catch {}
+        } else if (playerState === 5 || playerState === -1 || playerState === 2) {
+          // Recover if paused by browser autoplay policy
+          if (document.visibilityState === 'visible') {
+            try {
+              iframeRef.current?.contentWindow?.postMessage(
+                JSON.stringify({ event: 'command', func: 'mute', args: '' }),
+                '*'
+              );
+              iframeRef.current?.contentWindow?.postMessage(
+                JSON.stringify({ event: 'command', func: 'playVideo', args: '' }),
+                '*'
+              );
+              if (!isMuted) {
+                setTimeout(() => {
+                  try {
+                    iframeRef.current?.contentWindow?.postMessage(
+                      JSON.stringify({ event: 'command', func: 'unMute', args: '' }),
+                      '*'
+                    );
+                    iframeRef.current?.contentWindow?.postMessage(
+                      JSON.stringify({ event: 'command', func: 'setVolume', args: [100] }),
+                      '*'
+                    );
+                  } catch {}
+                }, 300);
+              }
+            } catch {}
+          }
         }
-      }
+      } catch {}
     };
 
     document.addEventListener('visibilitychange', handleVisibility);
-    window.addEventListener('blur', handleBlur);
-    window.addEventListener('focus', handleFocus);
-    window.addEventListener('pagehide', handleBlur);
+    window.addEventListener('pagehide', handleVisibility);
+    window.addEventListener('message', handleWindowMessage);
 
     return () => {
       document.removeEventListener('visibilitychange', handleVisibility);
-      window.removeEventListener('blur', handleBlur);
-      window.removeEventListener('focus', handleFocus);
-      window.removeEventListener('pagehide', handleBlur);
+      window.removeEventListener('pagehide', handleVisibility);
+      window.removeEventListener('message', handleWindowMessage);
     };
   }, [isOpen, isTrailerPlaying, isMuted]);
 
@@ -478,17 +503,17 @@ export const MovieModal: React.FC = () => {
 
           {/* Live YouTube Trailer Player with 3s Idle Autoplay */}
           {isTrailerPlaying && trailerKey && (
-            <div className="absolute inset-0 w-full h-full overflow-hidden pointer-events-none">
+            <div className="absolute inset-0 w-full h-full overflow-hidden pointer-events-none flex items-center justify-center">
               <iframe
                 ref={iframeRef}
-                src={`https://www.youtube-nocookie.com/embed/${trailerKey}?autoplay=1&mute=1&controls=0&modestbranding=1&rel=0&loop=1&playlist=${trailerKey}&playsinline=1&enablejsapi=1${
+                src={`https://www.youtube-nocookie.com/embed/${trailerKey}?autoplay=1&mute=1&controls=0&modestbranding=1&rel=0&loop=1&playlist=${trailerKey}&playsinline=1&enablejsapi=1&vq=hd1080${
                   typeof window !== 'undefined' && window.location.origin
                     ? `&origin=${encodeURIComponent(window.location.origin)}`
                     : ''
                 }`}
                 title={`${movie.title} Trailer`}
                 onLoad={() => {
-                  setIsTrailerReady(true);
+                  // Do NOT set isTrailerReady = true here. It must ONLY be set when playerState === 1
                   try {
                     iframeRef.current?.contentWindow?.postMessage(
                       JSON.stringify({ event: 'listening' }),
@@ -496,9 +521,30 @@ export const MovieModal: React.FC = () => {
                     );
                   } catch {}
 
+                  // Enforce Full HD 1080p stream
+                  try {
+                    iframeRef.current?.contentWindow?.postMessage(
+                      JSON.stringify({ event: 'command', func: 'setPlaybackQuality', args: ['hd1080'] }),
+                      '*'
+                    );
+                    iframeRef.current?.contentWindow?.postMessage(
+                      JSON.stringify({ event: 'command', func: 'setPlaybackQualityRange', args: [['hd1080', 'highres']] }),
+                      '*'
+                    );
+                  } catch {}
+
+                  setTimeout(() => {
+                    try {
+                      iframeRef.current?.contentWindow?.postMessage(
+                        JSON.stringify({ event: 'command', func: 'setPlaybackQuality', args: ['hd1080'] }),
+                        '*'
+                      );
+                    } catch {}
+                  }, 500);
+
                   const isAppActive =
                     typeof document !== 'undefined'
-                      ? document.visibilityState === 'visible' && document.hasFocus()
+                      ? document.visibilityState === 'visible'
                       : true;
                   if (!isAppActive) {
                     iframeRef.current?.contentWindow?.postMessage(
@@ -515,18 +561,22 @@ export const MovieModal: React.FC = () => {
                       '*'
                     );
                     if (!isMuted) {
-                      iframeRef.current?.contentWindow?.postMessage(
-                        JSON.stringify({ event: 'command', func: 'unMute', args: '' }),
-                        '*'
-                      );
-                      iframeRef.current?.contentWindow?.postMessage(
-                        JSON.stringify({ event: 'command', func: 'setVolume', args: [100] }),
-                        '*'
-                      );
+                      setTimeout(() => {
+                        try {
+                          iframeRef.current?.contentWindow?.postMessage(
+                            JSON.stringify({ event: 'command', func: 'unMute', args: '' }),
+                            '*'
+                          );
+                          iframeRef.current?.contentWindow?.postMessage(
+                            JSON.stringify({ event: 'command', func: 'setVolume', args: [100] }),
+                            '*'
+                          );
+                        } catch {}
+                      }, 200);
                     }
                   }
                 }}
-                className={`w-[124%] h-[124%] -ml-[12%] -mt-[12%] object-cover transition-opacity duration-1000 ${
+                className={`absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[120%] h-[140%] min-w-full min-h-full object-cover transition-opacity duration-1000 ${
                   isTrailerReady ? 'opacity-100' : 'opacity-0'
                 }`}
                 allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"

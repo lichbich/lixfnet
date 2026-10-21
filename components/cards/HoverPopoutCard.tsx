@@ -230,23 +230,41 @@ export const HoverPopoutCard: React.FC = () => {
         if (playerState === 1) {
           // 1 = PLAYING
           setIsTrailerReady(true);
+          try {
+            iframeRef.current?.contentWindow?.postMessage(
+              JSON.stringify({ event: 'command', func: 'setPlaybackQuality', args: ['hd1080'] }),
+              '*'
+            );
+            iframeRef.current?.contentWindow?.postMessage(
+              JSON.stringify({ event: 'command', func: 'setPlaybackQualityRange', args: [['hd1080', 'highres']] }),
+              '*'
+            );
+          } catch {}
         } else if (playerState === 5 || playerState === -1 || playerState === 2) {
           // 5 = CUED, -1 = UNSTARTED, 2 = PAUSED
           // Enforce playback so card trailer doesn't get stuck in paused state
           try {
             iframeRef.current?.contentWindow?.postMessage(
+              JSON.stringify({ event: 'command', func: 'mute', args: '' }),
+              '*'
+            );
+            iframeRef.current?.contentWindow?.postMessage(
               JSON.stringify({ event: 'command', func: 'playVideo', args: '' }),
               '*'
             );
             if (!isMuted) {
-              iframeRef.current?.contentWindow?.postMessage(
-                JSON.stringify({ event: 'command', func: 'unMute', args: '' }),
-                '*'
-              );
-              iframeRef.current?.contentWindow?.postMessage(
-                JSON.stringify({ event: 'command', func: 'setVolume', args: [100] }),
-                '*'
-              );
+              setTimeout(() => {
+                try {
+                  iframeRef.current?.contentWindow?.postMessage(
+                    JSON.stringify({ event: 'command', func: 'unMute', args: '' }),
+                    '*'
+                  );
+                  iframeRef.current?.contentWindow?.postMessage(
+                    JSON.stringify({ event: 'command', func: 'setVolume', args: [100] }),
+                    '*'
+                  );
+                } catch {}
+              }, 300);
             }
           } catch {}
         }
@@ -418,20 +436,32 @@ export const HoverPopoutCard: React.FC = () => {
 
         {/* Live YouTube Trailer Player (Autoplay, Loop, Muted or synced with isMuted) */}
         {isTrailerPlaying && trailerKey && (
-          <div className="absolute inset-0 w-full h-full overflow-hidden pointer-events-none">
+          <div className="absolute inset-0 w-full h-full overflow-hidden pointer-events-none flex items-center justify-center">
             <iframe
               ref={iframeRef}
-              src={`https://www.youtube-nocookie.com/embed/${trailerKey}?autoplay=1&mute=1&controls=0&modestbranding=1&rel=0&loop=1&playlist=${trailerKey}&playsinline=1&enablejsapi=1${
+              src={`https://www.youtube-nocookie.com/embed/${trailerKey}?autoplay=1&mute=1&controls=0&modestbranding=1&rel=0&loop=1&playlist=${trailerKey}&playsinline=1&enablejsapi=1&vq=hd1080${
                 typeof window !== 'undefined' && window.location.origin
                   ? `&origin=${encodeURIComponent(window.location.origin)}`
                   : ''
               }`}
               title={`${activeMovie.title} Trailer`}
               onLoad={() => {
-                setIsTrailerReady(true);
+                // Do NOT set isTrailerReady = true here. It must ONLY be set when playerState === 1
                 try {
                   iframeRef.current?.contentWindow?.postMessage(
                     JSON.stringify({ event: 'listening' }),
+                    '*'
+                  );
+                } catch {}
+
+                // Enforce Full HD 1080p stream
+                try {
+                  iframeRef.current?.contentWindow?.postMessage(
+                    JSON.stringify({ event: 'command', func: 'setPlaybackQuality', args: ['hd1080'] }),
+                    '*'
+                  );
+                  iframeRef.current?.contentWindow?.postMessage(
+                    JSON.stringify({ event: 'command', func: 'setPlaybackQualityRange', args: [['hd1080', 'highres']] }),
                     '*'
                   );
                 } catch {}
@@ -477,7 +507,7 @@ export const HoverPopoutCard: React.FC = () => {
                   } catch {}
                 }
               }}
-              className={`w-[114%] h-[114%] -ml-[7%] -mt-[7%] object-cover transition-opacity duration-700 ${
+              className={`absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[116%] h-[132%] min-w-full min-h-full object-cover transition-opacity duration-700 ${
                 isTrailerReady ? 'opacity-100' : 'opacity-0'
               }`}
               allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"

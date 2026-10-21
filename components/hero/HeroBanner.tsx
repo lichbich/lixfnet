@@ -30,12 +30,16 @@ export const HeroBanner: React.FC<HeroBannerProps> = ({ movie, badgeText }) => {
   const [isTrailerReady, setIsTrailerReady] = useState<boolean>(false);
   const [isInView, setIsInView] = useState<boolean>(true);
   const [isTabVisible, setIsTabVisible] = useState<boolean>(true);
-  const [isWindowFocused, setIsWindowFocused] = useState<boolean>(true);
 
   const containerRef = useRef<HTMLDivElement>(null);
   const iframeRef = useRef<HTMLIFrameElement>(null);
   const trailerTimerRef = useRef<NodeJS.Timeout | null>(null);
   const watchdogTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const hasUserInteractedRef = useRef<boolean>(
+    typeof navigator !== 'undefined' && 'userActivation' in navigator
+      ? Boolean(navigator.userActivation?.hasBeenActive)
+      : false
+  );
 
   const isTrailerPlayingRef = useRef(isTrailerPlaying);
   const isInViewRef = useRef(isInView);
@@ -84,7 +88,7 @@ export const HeroBanner: React.FC<HeroBannerProps> = ({ movie, badgeText }) => {
           JSON.stringify({ event: 'command', func, args: [] }),
           '*'
         );
-      } else if (typeof args === 'number') {
+      } else if (typeof args === 'number' || typeof args === 'string') {
         iframeRef.current.contentWindow.postMessage(
           JSON.stringify({ event: 'command', func, args: [args] }),
           '*'
@@ -92,6 +96,36 @@ export const HeroBanner: React.FC<HeroBannerProps> = ({ movie, badgeText }) => {
       }
     } catch {}
   }, []);
+
+  // Track user interaction (pointerdown, keydown, scroll, touch) to safely unmute per browser autoplay policy
+  useEffect(() => {
+    const onUserInteraction = () => {
+      hasUserInteractedRef.current = true;
+      if (
+        !isMutedRef.current &&
+        isTrailerPlayingRef.current &&
+        isInViewRef.current &&
+        !isModalOpenRef.current &&
+        !isCardTrailerPlayingRef.current
+      ) {
+        sendIframeCommand('unMute');
+        sendIframeCommand('setVolume', 100);
+        currentVolumeRef.current = 100;
+      }
+    };
+
+    window.addEventListener('pointerdown', onUserInteraction, { passive: true });
+    window.addEventListener('keydown', onUserInteraction, { passive: true });
+    window.addEventListener('scroll', onUserInteraction, { passive: true });
+    window.addEventListener('touchstart', onUserInteraction, { passive: true });
+
+    return () => {
+      window.removeEventListener('pointerdown', onUserInteraction);
+      window.removeEventListener('keydown', onUserInteraction);
+      window.removeEventListener('scroll', onUserInteraction);
+      window.removeEventListener('touchstart', onUserInteraction);
+    };
+  }, [sendIframeCommand]);
 
   // Smoothly fade out audio and pause video
   const fadeOutAndPause = useCallback((durationMs: number = 550) => {
@@ -257,6 +291,12 @@ export const HeroBanner: React.FC<HeroBannerProps> = ({ movie, badgeText }) => {
             trailerTimerRef.current = setTimeout(() => {
               if (!isCancelled) {
                 setIsTrailerPlaying(true);
+                // Watchdog: If trailer fails to start within 7s, cleanly revert to sharp poster
+                if (watchdogTimerRef.current) clearTimeout(watchdogTimerRef.current);
+                watchdogTimerRef.current = setTimeout(() => {
+                  setIsTrailerPlaying(false);
+                  setIsTrailerReady(false);
+                }, 7000);
               }
             }, 1000);
           } else {
@@ -274,6 +314,10 @@ export const HeroBanner: React.FC<HeroBannerProps> = ({ movie, badgeText }) => {
       if (trailerTimerRef.current) {
         clearTimeout(trailerTimerRef.current);
         trailerTimerRef.current = null;
+      }
+      if (watchdogTimerRef.current) {
+        clearTimeout(watchdogTimerRef.current);
+        watchdogTimerRef.current = null;
       }
     };
   }, [movie?.id]);
@@ -294,8 +338,19 @@ export const HeroBanner: React.FC<HeroBannerProps> = ({ movie, badgeText }) => {
             : undefined;
 
         if (playerState === 1) {
-          // 1 = PLAYING: Video is actively playing!
+          // 1 = PLAYING: Video is actively rendering frames!
           setIsTrailerReady(true);
+          sendIframeCommand('setPlaybackQuality', 'hd1080');
+          sendIframeCommand('setPlaybackQualityRange', ['hd1080', 'highres']);
+          if (watchdogTimerRef.current) {
+            clearTimeout(watchdogTimerRef.current);
+            watchdogTimerRef.current = null;
+          }
+          if (!isMutedRef.current && hasUserInteractedRef.current) {
+            sendIframeCommand('unMute');
+            sendIframeCommand('setVolume', 100);
+            currentVolumeRef.current = 100;
+          }
         } else if (
           playerState === 5 ||
           playerState === -1 ||
@@ -303,22 +358,29 @@ export const HeroBanner: React.FC<HeroBannerProps> = ({ movie, badgeText }) => {
         ) {
           // 5 = CUED, -1 = UNSTARTED, 2 = PAUSED
           // Proactively enforce playVideo so video does not stay stuck in pause
-          const isAppActive =
+          const isTabActive =
             typeof document !== 'undefined'
-              ? document.visibilityState === 'visible' && document.hasFocus()
+              ? document.visibilityState === 'visible'
               : true;
           const shouldPlay =
             isInViewRef.current &&
             !isModalOpenRef.current &&
-            isAppActive &&
+            isTabActive &&
             !isCardTrailerPlayingRef.current &&
             isTrailerPlayingRef.current;
 
           if (shouldPlay) {
+            // Start playback muted to reliably bypass browser autoplay restrictions
+            sendIframeCommand('mute');
             sendIframeCommand('playVideo');
-            if (!isMutedRef.current) {
-              sendIframeCommand('unMute');
-              sendIframeCommand('setVolume', 100);
+            if (!isMutedRef.current && hasUserInteractedRef.current) {
+              setTimeout(() => {
+                if (!isMutedRef.current && isTrailerPlayingRef.current && !isCardTrailerPlayingRef.current) {
+                  sendIframeCommand('unMute');
+                  sendIframeCommand('setVolume', 100);
+                  currentVolumeRef.current = 100;
+                }
+              }, 400);
             }
           }
         }
@@ -368,10 +430,10 @@ export const HeroBanner: React.FC<HeroBannerProps> = ({ movie, badgeText }) => {
 
     const observer = new IntersectionObserver(
       ([entry]) => {
-        setIsInView(entry.isIntersecting && entry.intersectionRatio > 0.15);
+        setIsInView(entry.isIntersecting);
       },
       {
-        threshold: [0, 0.15, 0.5, 1.0],
+        threshold: [0, 0.1, 0.5, 1.0],
       }
     );
 
@@ -379,7 +441,7 @@ export const HeroBanner: React.FC<HeroBannerProps> = ({ movie, badgeText }) => {
     return () => observer.disconnect();
   }, [movie?.id]);
 
-  // Pause trailer when tab is hidden or user switches to another window/app, resume on return
+  // Pause trailer when tab is hidden, resume on return
   useEffect(() => {
     const handlePause = () => {
       sendIframeCommand('pauseVideo');
@@ -388,18 +450,17 @@ export const HeroBanner: React.FC<HeroBannerProps> = ({ movie, badgeText }) => {
 
     const handleResumeIfEligible = () => {
       const isVisible = typeof document !== 'undefined' && document.visibilityState === 'visible';
-      const hasFocus = typeof document !== 'undefined' ? document.hasFocus() : true;
       if (
         isVisible &&
-        hasFocus &&
         isInViewRef.current &&
         !isModalOpenRef.current &&
         !isCardTrailerPlayingRef.current &&
         isTrailerPlayingRef.current
       ) {
         sendIframeCommand('playVideo');
-        if (!isMutedRef.current) {
+        if (!isMutedRef.current && hasUserInteractedRef.current) {
           sendIframeCommand('unMute');
+          sendIframeCommand('setVolume', 100);
         }
       }
     };
@@ -414,25 +475,11 @@ export const HeroBanner: React.FC<HeroBannerProps> = ({ movie, badgeText }) => {
       }
     };
 
-    const handleBlur = () => {
-      setIsWindowFocused(false);
-      handlePause();
-    };
-
-    const handleFocus = () => {
-      setIsWindowFocused(true);
-      setTimeout(handleResumeIfEligible, 60);
-    };
-
     document.addEventListener('visibilitychange', handleVisibility);
-    window.addEventListener('blur', handleBlur);
-    window.addEventListener('focus', handleFocus);
     window.addEventListener('pagehide', handlePause);
 
     return () => {
       document.removeEventListener('visibilitychange', handleVisibility);
-      window.removeEventListener('blur', handleBlur);
-      window.removeEventListener('focus', handleFocus);
       window.removeEventListener('pagehide', handlePause);
     };
   }, [sendIframeCommand]);
@@ -442,8 +489,7 @@ export const HeroBanner: React.FC<HeroBannerProps> = ({ movie, badgeText }) => {
   useEffect(() => {
     if (!iframeRef.current || !isTrailerPlaying || !trailerKey) return;
 
-    const isAppActive = isTabVisible && isWindowFocused;
-    const eligibleToPlay = isInView && !isModalOpen && isAppActive;
+    const eligibleToPlay = isInView && !isModalOpen && isTabVisible;
 
     if (isCardTrailerPlaying) {
       if (resumeDebounceTimerRef.current) {
@@ -483,20 +529,18 @@ export const HeroBanner: React.FC<HeroBannerProps> = ({ movie, badgeText }) => {
     isInView,
     isModalOpen,
     isTabVisible,
-    isWindowFocused,
     fadeOutAndPause,
     fadeInAndResume,
   ]);
 
-  // Sync play / pause with viewport visibility, window/tab focus, and modal state
+  // Sync play / pause with viewport visibility and modal state
   useEffect(() => {
     if (iframeRef.current && isTrailerPlaying && trailerKey) {
-      const isAppActive = isTabVisible && isWindowFocused;
-      const shouldPlay = isInView && !isModalOpen && isAppActive && !isCardTrailerPlaying;
+      const shouldPlay = isInView && !isModalOpen && isTabVisible && !isCardTrailerPlaying;
 
       if (shouldPlay) {
         sendIframeCommand('playVideo');
-        if (!isMuted) {
+        if (!isMuted && hasUserInteractedRef.current) {
           sendIframeCommand('unMute');
         }
       } else if (!isCardTrailerPlaying) {
@@ -504,21 +548,20 @@ export const HeroBanner: React.FC<HeroBannerProps> = ({ movie, badgeText }) => {
         sendIframeCommand('mute');
       }
     }
-  }, [isInView, isModalOpen, isTabVisible, isWindowFocused, isTrailerPlaying, trailerKey, isMuted, isCardTrailerPlaying, sendIframeCommand]);
+  }, [isInView, isModalOpen, isTabVisible, isTrailerPlaying, trailerKey, isMuted, isCardTrailerPlaying, sendIframeCommand]);
 
   // Sync mute / unmute state with YouTube iframe via postMessage
   useEffect(() => {
     if (iframeRef.current && isTrailerPlaying && trailerKey) {
-      const isAppActive = isTabVisible && isWindowFocused;
-      if (isAppActive && !isModalOpen && !isCardTrailerPlaying) {
+      if (isTabVisible && !isModalOpen && !isCardTrailerPlaying) {
         sendIframeCommand(isMuted ? 'mute' : 'unMute');
-        if (!isMuted) {
+        if (!isMuted && hasUserInteractedRef.current) {
           currentVolumeRef.current = 100;
           sendIframeCommand('setVolume', 100);
         }
       }
     }
-  }, [isMuted, isTrailerPlaying, trailerKey, isTabVisible, isWindowFocused, isModalOpen, isCardTrailerPlaying, sendIframeCommand]);
+  }, [isMuted, isTrailerPlaying, trailerKey, isTabVisible, isModalOpen, isCardTrailerPlaying, sendIframeCommand]);
 
   if (!movie) {
     return (
@@ -592,10 +635,11 @@ export const HeroBanner: React.FC<HeroBannerProps> = ({ movie, badgeText }) => {
           className="relative z-10 w-full h-[76vh] sm:h-[82vh] min-h-[580px] sm:min-h-[660px] max-h-[880px] rounded-2xl md:rounded-3xl overflow-hidden shadow-[0_30px_70px_-15px_rgba(0,0,0,0.95)] border border-white/10 bg-zinc-900 group"
         >
           {/* Adaptive Background Image & Video Layers */}
+          {/* Adaptive Background Image & Video Layers */}
           <div className="absolute inset-0 overflow-hidden">
-            {/* Ambient Blurred Layer: Ensures full-bleed color harmony without hard edges */}
+            {/* Ambient Blurred Cinema Fill: Radiates matching scene colors to soften any letterbox boundaries */}
             <div
-              className="absolute inset-0 bg-cover bg-center filter blur-2xl scale-110 opacity-40 pointer-events-none"
+              className="absolute inset-0 bg-cover bg-center filter blur-3xl scale-125 opacity-70 pointer-events-none transition-all duration-1000"
               style={{
                 backgroundImage: `url('${movie.backdropUrl || movie.posterUrl}')`,
               }}
@@ -611,20 +655,20 @@ export const HeroBanner: React.FC<HeroBannerProps> = ({ movie, badgeText }) => {
               }}
             />
 
-            {/* Live Autoplay YouTube Trailer Player - Static mute=1 prevents reload on audio toggle */}
+            {/* Live Autoplay YouTube Trailer Player - Centered Full-Cover without black letterbox gaps */}
             {isTrailerPlaying && trailerKey && (
-              <div className="absolute inset-0 w-full h-full overflow-hidden pointer-events-none">
+              <div className="absolute inset-0 w-full h-full overflow-hidden pointer-events-none flex items-center justify-center">
                 <iframe
                   ref={iframeRef}
                   id="hero-trailer-iframe"
-                  src={`https://www.youtube-nocookie.com/embed/${trailerKey}?autoplay=1&mute=1&controls=0&modestbranding=1&rel=0&loop=1&playlist=${trailerKey}&playsinline=1&enablejsapi=1${
+                  src={`https://www.youtube-nocookie.com/embed/${trailerKey}?autoplay=1&mute=1&controls=0&modestbranding=1&rel=0&loop=1&playlist=${trailerKey}&playsinline=1&enablejsapi=1&vq=hd1080${
                     typeof window !== 'undefined' && window.location.origin
                       ? `&origin=${encodeURIComponent(window.location.origin)}`
                       : ''
                   }`}
                   title={`${movie.title} Trailer`}
                   onLoad={() => {
-                    setIsTrailerReady(true);
+                    // Do NOT set isTrailerReady = true here. It must ONLY be set when playerState === 1
                     // Initial YouTube API listening handshake
                     try {
                       iframeRef.current?.contentWindow?.postMessage(
@@ -633,31 +677,30 @@ export const HeroBanner: React.FC<HeroBannerProps> = ({ movie, badgeText }) => {
                       );
                     } catch {}
 
-                    const isAppActive =
-                      typeof document !== 'undefined'
-                        ? document.visibilityState === 'visible' && document.hasFocus()
-                        : true;
+                    // Enforce Full HD 1080p stream
+                    sendIframeCommand('setPlaybackQuality', 'hd1080');
+                    sendIframeCommand('setPlaybackQualityRange', ['hd1080', 'highres']);
+                    setTimeout(() => {
+                      sendIframeCommand('setPlaybackQuality', 'hd1080');
+                      sendIframeCommand('setPlaybackQualityRange', ['hd1080', 'highres']);
+                    }, 500);
+
                     const shouldPlay =
                       isInView &&
                       !isModalOpen &&
-                      isAppActive &&
+                      isTabVisible &&
                       !isCardTrailerPlayingRef.current;
 
                     if (shouldPlay) {
-                      // Proactively start playback to ensure browser autoplay policy doesn't stall
+                      // Proactively start playback
                       sendIframeCommand('playVideo');
                       setTimeout(() => {
                         if (!isCardTrailerPlayingRef.current && !isModalOpenRef.current) {
                           sendIframeCommand('playVideo');
                         }
-                      }, 150);
-                      setTimeout(() => {
-                        if (!isCardTrailerPlayingRef.current && !isModalOpenRef.current) {
-                          sendIframeCommand('playVideo');
-                        }
-                      }, 350);
+                      }, 200);
 
-                      if (!isMuted) {
+                      if (!isMuted && hasUserInteractedRef.current) {
                         sendIframeCommand('unMute');
                         sendIframeCommand('setVolume', 100);
                         currentVolumeRef.current = 100;
@@ -671,7 +714,7 @@ export const HeroBanner: React.FC<HeroBannerProps> = ({ movie, badgeText }) => {
                       sendIframeCommand('mute');
                     }
                   }}
-                  className={`w-[124%] h-[124%] -ml-[12%] -mt-[12%] object-cover transition-opacity duration-1000 ${
+                  className={`absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[120%] h-[142%] min-w-full min-h-full object-cover transition-opacity duration-1000 ${
                     isTrailerReady ? 'opacity-100' : 'opacity-0'
                   }`}
                   allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
@@ -679,9 +722,14 @@ export const HeroBanner: React.FC<HeroBannerProps> = ({ movie, badgeText }) => {
               </div>
             )}
 
-            {/* Subtle Cinematic Gradients: Allows full trailer visibility like real Netflix */}
-            <div className="absolute inset-0 bg-gradient-to-r from-black/80 via-black/35 to-transparent w-full md:w-3/5 pointer-events-none" />
-            <div className="absolute inset-0 bg-gradient-to-t from-[#141414] via-transparent to-black/20 pointer-events-none" />
+            {/* Top Soft Vignette: Smoothly feathers upper edge */}
+            <div className="absolute top-0 inset-x-0 h-28 bg-gradient-to-b from-black/60 via-black/15 to-transparent pointer-events-none" />
+
+            {/* Left Gradient: Text readability while preserving video visibility */}
+            <div className="absolute inset-y-0 left-0 w-full md:w-3/5 bg-gradient-to-r from-black/85 via-black/35 to-transparent pointer-events-none" />
+
+            {/* Bottom Feathering: Natural ambient fade around metadata instead of harsh solid black slab */}
+            <div className="absolute bottom-0 inset-x-0 h-44 bg-gradient-to-t from-[#141414] via-[#141414]/50 to-transparent pointer-events-none" />
           </div>
 
           {/* Top-Left Netflix "N" Logo & Category Ribbon */}
