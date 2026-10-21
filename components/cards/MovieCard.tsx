@@ -9,9 +9,16 @@ import { useNetflix } from '@/context/NetflixContext';
 interface MovieCardProps {
   movie: Movie;
   variant?: 'landscape' | 'portrait';
+  fillWidth?: boolean;
+  className?: string;
 }
 
-export const MovieCard: React.FC<MovieCardProps> = ({ movie, variant = 'landscape' }) => {
+export const MovieCard: React.FC<MovieCardProps> = ({
+  movie,
+  variant = 'landscape',
+  fillWidth = false,
+  className = '',
+}) => {
   const {
     openModal,
     startPlaying,
@@ -41,17 +48,21 @@ export const MovieCard: React.FC<MovieCardProps> = ({ movie, variant = 'landscap
     ? movie.posterUrl || movie.backdropUrl
     : movie.backdropUrl || movie.posterUrl;
 
+  const sizeClasses = fillWidth
+    ? isPortrait
+      ? 'w-full aspect-[2/3]'
+      : 'w-full aspect-video'
+    : isPortrait
+      ? 'w-[145px] sm:w-[175px] md:w-[195px] aspect-[2/3]'
+      : 'w-[210px] sm:w-[240px] md:w-[260px] aspect-video';
+
   return (
     <div
       ref={cardRef}
       onClick={() => openModal(movie)}
       onMouseEnter={handleMouseEnter}
       onMouseLeave={handleMouseLeave}
-      className={`relative flex-shrink-0 rounded-md overflow-hidden bg-zinc-800 shadow-md border border-white/5 cursor-pointer group select-none transition-all duration-500 hover:border-white/30 hover:shadow-2xl ${
-        isPortrait
-          ? 'w-[145px] sm:w-[175px] md:w-[195px] aspect-[2/3]'
-          : 'w-[210px] sm:w-[240px] md:w-[260px] aspect-video'
-      }`}
+      className={`relative flex-shrink-0 rounded-md sm:rounded-lg overflow-hidden bg-zinc-800 shadow-md border border-white/5 cursor-pointer group select-none transition-all duration-300 hover:border-white/30 hover:shadow-2xl hover:scale-[1.03] hover:z-20 ${sizeClasses} ${className}`}
     >
       {/* Smart Adaptive Ambient Blur Layer */}
       <div

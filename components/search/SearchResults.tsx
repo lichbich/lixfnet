@@ -108,9 +108,28 @@ export const SearchResults: React.FC = () => {
 
   const combinedMovies = apiResults;
 
+  // Netflix-style "Tác phẩm khác để khám phá" suggestions from top search results
+  const exploreSuggestions = React.useMemo(() => {
+    if (apiResults.length <= 1) return [];
+    const titles: string[] = [];
+    const seen = new Set<string>();
+    const cleanQ = searchQuery.toLowerCase().trim();
+
+    for (const m of apiResults) {
+      const displayTitle = m.title.trim();
+      const lower = displayTitle.toLowerCase();
+      if (!seen.has(lower) && lower !== cleanQ) {
+        seen.add(lower);
+        titles.push(displayTitle);
+      }
+      if (titles.length >= 8) break;
+    }
+    return titles;
+  }, [apiResults, searchQuery]);
+
   return (
-    <div className="pt-24 px-4 sm:px-8 md:px-12 max-w-[1920px] mx-auto min-h-[70vh] pb-16">
-      <div className="flex items-center justify-between mb-6">
+    <div className="pt-24 px-4 sm:px-8 md:px-12 max-w-[1920px] mx-auto min-h-[70vh] pb-20">
+      <div className="flex items-center justify-between mb-4">
         <div className="flex items-center gap-3">
           <h2 className="text-xl sm:text-2xl font-bold text-white">
             Kết quả tìm kiếm cho: <span className="text-red-500 font-extrabold">&quot;{searchQuery}&quot;</span>
@@ -131,6 +150,24 @@ export const SearchResults: React.FC = () => {
         </button>
       </div>
 
+      {/* Netflix-style explore suggestions bar */}
+      {exploreSuggestions.length > 0 && !isLoading && (
+        <div className="flex flex-wrap items-center gap-x-2.5 gap-y-1.5 mb-8 text-xs sm:text-sm text-zinc-400 font-normal">
+          <span className="text-zinc-500">Tác phẩm khác để khám phá:</span>
+          {exploreSuggestions.map((title, idx) => (
+            <React.Fragment key={title}>
+              {idx > 0 && <span className="text-zinc-700 select-none">|</span>}
+              <button
+                onClick={() => setSearchQuery(title)}
+                className="text-zinc-300 hover:text-white transition-colors cursor-pointer hover:underline"
+              >
+                {title}
+              </button>
+            </React.Fragment>
+          ))}
+        </div>
+      )}
+
       {isLoading && combinedMovies.length === 0 ? (
         <div className="flex flex-col items-center justify-center py-24 text-zinc-400">
           <Loader2 className="w-8 h-8 animate-spin text-red-500 mb-3" />
@@ -145,10 +182,11 @@ export const SearchResults: React.FC = () => {
         </div>
       ) : (
         <>
-          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-4">
+          {/* Netflix-style 5 columns desktop grid with larger cards and fillWidth */}
+          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-x-2 sm:gap-x-2.5 md:gap-x-3 gap-y-8 sm:gap-y-10 md:gap-y-12">
             {combinedMovies.map((movie) => (
-              <div key={movie.id} className="flex justify-center">
-                <MovieCard movie={movie} />
+              <div key={movie.id} className="w-full">
+                <MovieCard movie={movie} fillWidth />
               </div>
             ))}
           </div>
@@ -163,7 +201,7 @@ export const SearchResults: React.FC = () => {
 
           {/* End of results indicator */}
           {!hasMore && combinedMovies.length > 10 && (
-            <div className="text-center py-10 text-xs text-zinc-500 font-medium border-t border-zinc-800/60 mt-8">
+            <div className="text-center py-10 text-xs text-zinc-500 font-medium border-t border-zinc-800/60 mt-12">
               Đã hiển thị toàn bộ {combinedMovies.length} kết quả tìm kiếm cho &quot;{searchQuery}&quot;
             </div>
           )}
