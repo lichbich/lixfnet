@@ -18,6 +18,7 @@ import { RatingBadge, QualityBadge } from '@/components/ui/Badge';
 import { useNetflix } from '@/context/NetflixContext';
 import { getSimilarMovies } from '@/services/movieApi';
 import { getMovieCollection, MovieCollection } from '@/services/collectionService';
+import { clientLogoCache } from '@/services/logoService';
 import { Movie } from '@/types';
 
 /** Cleanly format episode titles, e.g. "4" -> "Tập 4", "Tập 4" -> "Tập 4", "Full" -> "Bản Full" */
@@ -66,16 +67,42 @@ export const MovieModal: React.FC = () => {
   const [backupKeys, setBackupKeys] = useState<string[]>([]);
   const [isTrailerPlaying, setIsTrailerPlaying] = useState<boolean>(false);
   const [isTrailerReady, setIsTrailerReady] = useState<boolean>(false);
+  const [logoUrl, setLogoUrl] = useState<string | null>(selectedMovie?.logoUrl || null);
+  const [isLogoLoaded, setIsLogoLoaded] = useState<boolean>(false);
+  const currentMovieKeyRef = useRef<string | null>(null);
   const idleTimerRef = useRef<NodeJS.Timeout | null>(null);
   const iframeRef = useRef<HTMLIFrameElement>(null);
 
   useEffect(() => {
     if (selectedMovie) {
+      const movieKey = selectedMovie.slug || selectedMovie.id;
+      const isDifferentMovie = currentMovieKeyRef.current !== movieKey;
+      currentMovieKeyRef.current = movieKey;
+
       if (exitTimerRef.current) {
         clearTimeout(exitTimerRef.current);
         exitTimerRef.current = null;
       }
+
       setDisplayedMovie(selectedMovie);
+
+      // Only re-initialize logo if switching to a totally new movie
+      if (isDifferentMovie) {
+        setIsLogoLoaded(false);
+        const cached = clientLogoCache.get(movieKey) || selectedMovie.logoUrl;
+        if (cached) {
+          setLogoUrl(cached);
+        } else {
+          let sessionLogo: string | null = null;
+          try {
+            sessionLogo = sessionStorage.getItem(`netlix_logo_${movieKey}`);
+          } catch {}
+          setLogoUrl(sessionLogo && sessionLogo !== 'none' ? sessionLogo : null);
+        }
+      } else if (!logoUrl && selectedMovie.logoUrl) {
+        setLogoUrl(selectedMovie.logoUrl);
+      }
+
       // Double rAF ensures smooth CSS bloom transition
       requestAnimationFrame(() => {
         requestAnimationFrame(() => {
@@ -83,9 +110,12 @@ export const MovieModal: React.FC = () => {
         });
       });
     } else if (isOpen) {
+      currentMovieKeyRef.current = null;
       setIsOpen(false);
       exitTimerRef.current = setTimeout(() => {
         setDisplayedMovie(null);
+        setLogoUrl(null);
+        setIsLogoLoaded(false);
         exitTimerRef.current = null;
       }, 260);
     }
@@ -142,6 +172,12 @@ export const MovieModal: React.FC = () => {
         .then((res) => res.json())
         .then((data) => {
           if (isCancelled) return;
+          if (data.logoUrl) {
+            setLogoUrl(data.logoUrl);
+            try {
+              sessionStorage.setItem(`netlix_logo_${movieSlug}`, data.logoUrl);
+            } catch {}
+          }
           if (data.youtubeKey) {
             setTrailerKey(data.youtubeKey);
             if (data.backupKeys && Array.isArray(data.backupKeys)) {
@@ -160,6 +196,36 @@ export const MovieModal: React.FC = () => {
           }
         })
         .catch(() => {});
+    }
+
+    // Proactively fetch TMDB logo if not already present on movie object
+    if (!displayedMovie.logoUrl) {
+      const qTitle = encodeURIComponent(displayedMovie.title || '');
+      const qSub = encodeURIComponent(displayedMovie.subTitle || '');
+      const qSlug = encodeURIComponent(movieSlug);
+      const qYear = encodeURIComponent(displayedMovie.year ? String(displayedMovie.year) : '');
+      const qTmdbId = encodeURIComponent(displayedMovie.tmdb?.id ? String(displayedMovie.tmdb.id) : '');
+      const qMediaType = encodeURIComponent(displayedMovie.tmdb?.type || '');
+
+      fetch(
+        `/api/logo?title=${qTitle}&subTitle=${qSub}&slug=${qSlug}&year=${qYear}&tmdbId=${qTmdbId}&mediaType=${qMediaType}`
+      )
+        .then((res) => res.json())
+        .then((data) => {
+          if (!isCancelled && data.logoUrl) {
+            setLogoUrl(data.logoUrl);
+            try {
+              sessionStorage.setItem(`netlix_logo_${movieSlug}`, data.logoUrl);
+            } catch {}
+          } else if (!isCancelled) {
+            try {
+              sessionStorage.setItem(`netlix_logo_${movieSlug}`, 'none');
+            } catch {}
+          }
+        })
+        .catch(() => {});
+    } else {
+      setLogoUrl(displayedMovie.logoUrl);
     }
 
     return () => {
@@ -667,14 +733,55 @@ export const MovieModal: React.FC = () => {
           {/* Banner Controls & Title */}
           <div className="absolute bottom-8 left-6 sm:left-10 right-6 sm:right-10 flex items-end justify-between">
             <div className="max-w-xl">
-              <h1 className="text-3xl sm:text-4xl md:text-5xl font-black uppercase tracking-tight drop-shadow-lg text-white">
-                {movie.title}
-              </h1>
-              {movie.subTitle && (
-                <p className="text-sm sm:text-base text-zinc-300 font-semibold tracking-wider uppercase mt-1 drop-shadow">
-                  {movie.subTitle}
-                </p>
+            {/* Title Display with CSS Grid Stacking (Zero vertical layout shift) */}
+            <div className="grid grid-cols-1 grid-rows-1 items-end mb-3">
+              {/* Layer 1: Plain text title */}
+              <div
+                style={{ gridArea: '1 / 1 / 2 / 2' }}
+                className={`transition-opacity duration-500 ease-in-out ${
+                  isLogoLoaded && logoUrl
+                    ? 'opacity-0 pointer-events-none'
+                    : 'opacity-100'
+                }`}
+              >
+                <h1 className="text-3xl sm:text-4xl md:text-5xl font-black uppercase tracking-tight drop-shadow-lg text-white">
+                  {movie.title}
+                </h1>
+                {movie.subTitle && (
+                  <p className="text-sm sm:text-base text-zinc-300 font-semibold tracking-wider uppercase mt-1 drop-shadow">
+                    {movie.subTitle}
+                  </p>
+                )}
+              </div>
+
+              {/* Layer 2: Graphic Title logo */}
+              {logoUrl && (
+                <div
+                  style={{ gridArea: '1 / 1 / 2 / 2' }}
+                  className={`relative w-fit max-w-[260px] sm:max-w-[380px] md:max-w-[460px] transition-opacity duration-500 ease-in-out ${
+                    isLogoLoaded
+                      ? 'opacity-100'
+                      : 'opacity-0 pointer-events-none'
+                  }`}
+                >
+                  <img
+                    src={logoUrl}
+                    alt={movie.title}
+                    onLoad={() => setIsLogoLoaded(true)}
+                    onError={() => {
+                      setLogoUrl(null);
+                      setIsLogoLoaded(false);
+                    }}
+                    className="max-h-20 sm:max-h-28 md:max-h-36 w-auto object-contain filter drop-shadow-[0_4px_16px_rgba(0,0,0,0.95)] select-none pointer-events-none transition-transform duration-500 hover:scale-105"
+                  />
+                  {movie.subTitle && (
+                    <p className="text-xs sm:text-sm text-zinc-300 font-semibold tracking-wider uppercase mt-1 drop-shadow">
+                      {movie.subTitle}
+                    </p>
+                  )}
+                </div>
               )}
+            </div>
 
               {/* Action Buttons & In-Progress Bar */}
               <div className="flex flex-col sm:flex-row sm:items-center gap-3 mt-4">

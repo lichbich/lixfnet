@@ -28,6 +28,8 @@ export const HeroBanner: React.FC<HeroBannerProps> = ({ movie, badgeText }) => {
   const [backupKeys, setBackupKeys] = useState<string[]>([]);
   const [isTrailerPlaying, setIsTrailerPlaying] = useState<boolean>(false);
   const [isTrailerReady, setIsTrailerReady] = useState<boolean>(false);
+  const [logoUrl, setLogoUrl] = useState<string | null>(movie?.logoUrl || null);
+  const [isLogoLoaded, setIsLogoLoaded] = useState<boolean>(false);
   const [isInView, setIsInView] = useState<boolean>(true);
   const [isTabVisible, setIsTabVisible] = useState<boolean>(true);
   const [isWindowFocused, setIsWindowFocused] = useState<boolean>(true);
@@ -211,10 +213,25 @@ export const HeroBanner: React.FC<HeroBannerProps> = ({ movie, badgeText }) => {
 
     if (!movie) return;
 
+    setIsLogoLoaded(false);
     let isCancelled = false;
     const movieSlug = movie.slug || movie.id;
 
-    // Check client-side storage cache first
+    // Check client storage cache for logo first
+    let cachedLogo: string | null = null;
+    try {
+      cachedLogo = sessionStorage.getItem(`netlix_logo_${movieSlug}`);
+    } catch {}
+
+    if (cachedLogo && cachedLogo !== 'none') {
+      setLogoUrl(cachedLogo);
+    } else if (movie.logoUrl) {
+      setLogoUrl(movie.logoUrl);
+    } else {
+      setLogoUrl(null);
+    }
+
+    // Check client-side storage cache first for trailer
     let cachedKey: string | null = null;
     try {
       cachedKey = sessionStorage.getItem(`netlix_trailer_${movieSlug}`);
@@ -243,6 +260,12 @@ export const HeroBanner: React.FC<HeroBannerProps> = ({ movie, badgeText }) => {
         .then((res) => res.json())
         .then((data) => {
           if (isCancelled) return;
+          if (data.logoUrl) {
+            setLogoUrl(data.logoUrl);
+            try {
+              sessionStorage.setItem(`netlix_logo_${movieSlug}`, data.logoUrl);
+            } catch {}
+          }
           if (data.youtubeKey) {
             setTrailerKey(data.youtubeKey);
             if (data.backupKeys && Array.isArray(data.backupKeys)) {
@@ -264,6 +287,34 @@ export const HeroBanner: React.FC<HeroBannerProps> = ({ movie, badgeText }) => {
             setTrailerKey(null);
             setIsTrailerPlaying(false);
             setIsTrailerReady(false);
+          }
+        })
+        .catch(() => {});
+    }
+
+    // Proactively fetch TMDB logo if not in cache or on movie
+    if (!movie.logoUrl && cachedLogo !== 'none' && !cachedLogo) {
+      const qTitle = encodeURIComponent(movie.title || '');
+      const qSub = encodeURIComponent(movie.subTitle || '');
+      const qSlug = encodeURIComponent(movieSlug);
+      const qYear = encodeURIComponent(movie.year ? String(movie.year) : '');
+      const qTmdbId = encodeURIComponent(movie.tmdb?.id ? String(movie.tmdb.id) : '');
+      const qMediaType = encodeURIComponent(movie.tmdb?.type || '');
+
+      fetch(
+        `/api/logo?title=${qTitle}&subTitle=${qSub}&slug=${qSlug}&year=${qYear}&tmdbId=${qTmdbId}&mediaType=${qMediaType}`
+      )
+        .then((res) => res.json())
+        .then((data) => {
+          if (!isCancelled && data.logoUrl) {
+            setLogoUrl(data.logoUrl);
+            try {
+              sessionStorage.setItem(`netlix_logo_${movieSlug}`, data.logoUrl);
+            } catch {}
+          } else if (!isCancelled) {
+            try {
+              sessionStorage.setItem(`netlix_logo_${movieSlug}`, 'none');
+            } catch {}
           }
         })
         .catch(() => {});
@@ -723,15 +774,54 @@ export const HeroBanner: React.FC<HeroBannerProps> = ({ movie, badgeText }) => {
 
           {/* Hero Content Left Block - Minimalist Netflix Layout to showcase trailer */}
           <div className="absolute bottom-6 left-4 sm:bottom-14 sm:left-10 md:left-14 max-w-xl lg:max-w-2xl z-10 text-white">
-            {/* Main Title from API */}
-            <div className="mb-2 sm:mb-3">
-              <h1 className="text-2xl sm:text-4xl md:text-5xl lg:text-6xl font-black uppercase tracking-tight leading-tight text-white drop-shadow-2xl line-clamp-2">
-                {movie.title}
-              </h1>
-              {movie.subTitle && (
-                <h2 className="text-xs sm:text-sm md:text-base font-semibold tracking-wider uppercase mt-1 text-zinc-300 drop-shadow line-clamp-1">
-                  {movie.subTitle}
-                </h2>
+            {/* Main Title / Title Logo with CSS Grid Stacking (Zero vertical layout shift) */}
+            <div className="grid grid-cols-1 grid-rows-1 items-end mb-3 sm:mb-4">
+              {/* Layer 1: Plain text title */}
+              <div
+                style={{ gridArea: '1 / 1 / 2 / 2' }}
+                className={`transition-opacity duration-500 ease-in-out ${
+                  isLogoLoaded && logoUrl
+                    ? 'opacity-0 pointer-events-none'
+                    : 'opacity-100'
+                }`}
+              >
+                <h1 className="text-2xl sm:text-4xl md:text-5xl lg:text-6xl font-black uppercase tracking-tight leading-tight text-white drop-shadow-2xl line-clamp-2">
+                  {movie.title}
+                </h1>
+                {movie.subTitle && (
+                  <h2 className="text-xs sm:text-sm md:text-base font-semibold tracking-wider uppercase mt-1 text-zinc-300 drop-shadow line-clamp-1">
+                    {movie.subTitle}
+                  </h2>
+                )}
+              </div>
+
+              {/* Layer 2: Graphic Title logo */}
+              {logoUrl && (
+                <div
+                  style={{ gridArea: '1 / 1 / 2 / 2' }}
+                  className={`relative w-fit max-w-[280px] sm:max-w-[400px] md:max-w-[480px] transition-opacity duration-500 ease-in-out ${
+                    isLogoLoaded
+                      ? 'opacity-100'
+                      : 'opacity-0 pointer-events-none'
+                  }`}
+                >
+                  <img
+                    src={logoUrl}
+                    alt={movie.title}
+                    onLoad={() => setIsLogoLoaded(true)}
+                    onError={() => {
+                      setLogoUrl(null);
+                      setIsLogoLoaded(false);
+                    }}
+                    className="max-h-24 sm:max-h-32 md:max-h-40 w-auto object-contain filter drop-shadow-[0_4px_16px_rgba(0,0,0,0.95)] select-none pointer-events-none transition-transform duration-500 hover:scale-105"
+                    loading="eager"
+                  />
+                  {movie.subTitle && (
+                    <h2 className="text-xs sm:text-sm font-semibold tracking-wider uppercase mt-2 text-zinc-300 drop-shadow line-clamp-1">
+                      {movie.subTitle}
+                    </h2>
+                  )}
+                </div>
               )}
             </div>
 

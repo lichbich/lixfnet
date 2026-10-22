@@ -14,6 +14,7 @@ import {
 import { useNetflix } from '@/context/NetflixContext';
 import { RatingBadge, QualityBadge, Top10Badge } from '@/components/ui/Badge';
 import { NetflixRibbonN } from '@/components/ui/NetflixLogo';
+import { clientLogoCache } from '@/services/logoService';
 
 export const HoverPopoutCard: React.FC = () => {
   const {
@@ -47,6 +48,8 @@ export const HoverPopoutCard: React.FC = () => {
   const [backupKeys, setBackupKeys] = useState<string[]>([]);
   const [isTrailerPlaying, setIsTrailerPlaying] = useState<boolean>(false);
   const [isTrailerReady, setIsTrailerReady] = useState<boolean>(false);
+  const [logoUrl, setLogoUrl] = useState<string | null>(hoveredMovie?.logoUrl || null);
+  const [isLogoLoaded, setIsLogoLoaded] = useState<boolean>(false);
   const trailerTimerRef = useRef<NodeJS.Timeout | null>(null);
   const watchdogTimerRef = useRef<NodeJS.Timeout | null>(null);
   const iframeRef = useRef<HTMLIFrameElement>(null);
@@ -64,6 +67,12 @@ export const HoverPopoutCard: React.FC = () => {
       const isSwitching = activeMovie && activeMovie.id !== hoveredMovie.id;
       setActiveMovie(hoveredMovie);
       setActiveRect(hoverRect);
+
+      // Check client logo cache synchronously
+      const movieKey = hoveredMovie.slug || hoveredMovie.id;
+      const cached = clientLogoCache.get(movieKey) || hoveredMovie.logoUrl || null;
+      setLogoUrl(cached);
+      setIsLogoLoaded(false);
 
       if (isSwitching) {
         setIsOpen(true);
@@ -155,7 +164,52 @@ export const HoverPopoutCard: React.FC = () => {
       maybePlayTrailer();
     }, 1120);
 
-    // Check client storage cache
+    // 1. Separate reliable logo resolution with multi-level caching
+    const movieKey = activeMovie.slug || activeMovie.id;
+    const existingCached = clientLogoCache.get(movieKey) || activeMovie.logoUrl;
+    if (existingCached) {
+      setLogoUrl(existingCached);
+    } else {
+      let sessionLogo: string | null = null;
+      try {
+        sessionLogo = sessionStorage.getItem(`netlix_logo_${movieKey}`);
+      } catch {}
+
+      if (sessionLogo && sessionLogo !== 'none') {
+        setLogoUrl(sessionLogo);
+        clientLogoCache.set(movieKey, sessionLogo);
+      } else if (sessionLogo !== 'none') {
+        // Eagerly resolve logo from TMDB
+        const qTitle = encodeURIComponent(activeMovie.title || '');
+        const qSub = encodeURIComponent(activeMovie.subTitle || '');
+        const qSlug = encodeURIComponent(movieSlug);
+        const qYear = encodeURIComponent(activeMovie.year ? String(activeMovie.year) : '');
+        const qTmdbId = encodeURIComponent(activeMovie.tmdb?.id ? String(activeMovie.tmdb.id) : '');
+        const qMediaType = encodeURIComponent(activeMovie.tmdb?.type || '');
+
+        fetch(
+          `/api/logo?title=${qTitle}&subTitle=${qSub}&slug=${qSlug}&year=${qYear}&tmdbId=${qTmdbId}&mediaType=${qMediaType}`
+        )
+          .then((res) => res.json())
+          .then((data) => {
+            if (isCancelled) return;
+            if (data.logoUrl) {
+              setLogoUrl(data.logoUrl);
+              clientLogoCache.set(movieKey, data.logoUrl);
+              try {
+                sessionStorage.setItem(`netlix_logo_${movieKey}`, data.logoUrl);
+              } catch {}
+            } else {
+              try {
+                sessionStorage.setItem(`netlix_logo_${movieKey}`, 'none');
+              } catch {}
+            }
+          })
+          .catch(() => {});
+      }
+    }
+
+    // 2. Check client storage cache for trailer
     let cachedKey: string | null = null;
     try {
       cachedKey = sessionStorage.getItem(`netlix_trailer_${movieSlug}`);
@@ -181,6 +235,13 @@ export const HoverPopoutCard: React.FC = () => {
         .then((res) => res.json())
         .then((data) => {
           if (isCancelled) return;
+          if (data.logoUrl) {
+            setLogoUrl(data.logoUrl);
+            clientLogoCache.set(movieKey, data.logoUrl);
+            try {
+              sessionStorage.setItem(`netlix_logo_${movieKey}`, data.logoUrl);
+            } catch {}
+          }
           if (data.youtubeKey) {
             setTrailerKey(data.youtubeKey);
             if (data.backupKeys && Array.isArray(data.backupKeys)) {
@@ -525,10 +586,38 @@ export const HoverPopoutCard: React.FC = () => {
         </div>
 
         {/* Bottom Title & Mute Button Overlay */}
-        <div className="absolute inset-0 bg-gradient-to-t from-[#181818] via-black/20 to-transparent flex items-end justify-between p-3.5 z-10 pointer-events-none">
-          <h3 className="text-white font-black text-sm sm:text-base drop-shadow-md line-clamp-1 uppercase tracking-tight max-w-[80%]">
-            {activeMovie.title}
-          </h3>
+        <div className="absolute inset-0 bg-gradient-to-t from-[#181818] via-black/30 to-transparent flex items-end justify-between p-3.5 z-10 pointer-events-none">
+          {/* Smooth Dissolve Container between Plain Text and Graphic Logo (CSS Grid Stacking) */}
+          <div className="grid grid-cols-1 grid-rows-1 items-end max-w-[78%]">
+            {/* Plain text title: gently dissolves out when logo finishes loading */}
+            <h3
+              style={{ gridArea: '1 / 1 / 2 / 2' }}
+              className={`text-white font-black text-sm sm:text-base drop-shadow-md line-clamp-1 uppercase tracking-tight transition-opacity duration-500 ease-in-out ${
+                isLogoLoaded && logoUrl
+                  ? 'opacity-0 pointer-events-none'
+                  : 'opacity-100'
+              }`}
+            >
+              {activeMovie.title}
+            </h3>
+
+            {/* Title logo: gently blooms in only after image is fully decoded */}
+            {logoUrl && (
+              <img
+                style={{ gridArea: '1 / 1 / 2 / 2' }}
+                src={logoUrl}
+                alt={activeMovie.title}
+                onLoad={() => setIsLogoLoaded(true)}
+                onError={() => {
+                  setLogoUrl(null);
+                  setIsLogoLoaded(false);
+                }}
+                className={`max-h-7 sm:max-h-8 max-w-full w-auto object-contain filter drop-shadow-[0_2px_10px_rgba(0,0,0,0.95)] select-none pointer-events-none transition-opacity duration-500 ease-in-out ${
+                  isLogoLoaded ? 'opacity-100' : 'opacity-0 pointer-events-none'
+                }`}
+              />
+            )}
+          </div>
 
           <button
             onClick={(e) => {

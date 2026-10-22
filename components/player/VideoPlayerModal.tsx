@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useRef, useState, useEffect } from 'react';
+import React, { useRef, useState, useEffect, useCallback } from 'react';
 import {
   ArrowLeft,
   Play,
@@ -339,27 +339,57 @@ export const VideoPlayerModal: React.FC = () => {
     }
   }, [playingMovie?.id, playingMovie?.slug, activeEmbed, getWatchProgress, setPlayingEpisode]);
 
-  // Auto-hide controls timeout
+  // Auto-hide controls timer with refs & interaction handlers
+  const controlsTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const showEpisodeSelectorRef = useRef(showEpisodeSelector);
+  showEpisodeSelectorRef.current = showEpisodeSelector;
+  const isPlayingRef = useRef(isPlaying);
+  isPlayingRef.current = isPlaying;
+
+  const resetControlsTimer = useCallback(() => {
+    setShowControls(true);
+    if (controlsTimeoutRef.current) {
+      clearTimeout(controlsTimeoutRef.current);
+    }
+    controlsTimeoutRef.current = setTimeout(() => {
+      // Never hide controls while episode picker is open
+      if (isPlayingRef.current && !showEpisodeSelectorRef.current) {
+        setShowControls(false);
+      }
+    }, 3500);
+  }, []);
+
+  // When episode selector opens, freeze controls visible; when closed, resume timer
   useEffect(() => {
-    let timer: NodeJS.Timeout;
-    const resetTimer = () => {
+    if (showEpisodeSelector) {
+      if (controlsTimeoutRef.current) clearTimeout(controlsTimeoutRef.current);
       setShowControls(true);
-      clearTimeout(timer);
-      timer = setTimeout(() => {
-        if (isPlaying) setShowControls(false);
-      }, 3500);
+    } else {
+      resetControlsTimer();
+    }
+  }, [showEpisodeSelector, resetControlsTimer]);
+
+  // Global interaction listeners (mouse, touch, iframe focus/blur)
+  useEffect(() => {
+    resetControlsTimer();
+
+    const handleInteraction = () => {
+      resetControlsTimer();
     };
 
-    window.addEventListener('mousemove', resetTimer);
-    window.addEventListener('touchstart', resetTimer);
-    window.addEventListener('pointerdown', resetTimer);
+    window.addEventListener('mousemove', handleInteraction);
+    window.addEventListener('touchstart', handleInteraction, { passive: true });
+    window.addEventListener('pointerdown', handleInteraction);
+    window.addEventListener('blur', handleInteraction);
+
     return () => {
-      window.removeEventListener('mousemove', resetTimer);
-      window.removeEventListener('touchstart', resetTimer);
-      window.removeEventListener('pointerdown', resetTimer);
-      clearTimeout(timer);
+      window.removeEventListener('mousemove', handleInteraction);
+      window.removeEventListener('touchstart', handleInteraction);
+      window.removeEventListener('pointerdown', handleInteraction);
+      window.removeEventListener('blur', handleInteraction);
+      if (controlsTimeoutRef.current) clearTimeout(controlsTimeoutRef.current);
     };
-  }, [isPlaying]);
+  }, [resetControlsTimer]);
 
   // Keyboard shortcuts
   useEffect(() => {
@@ -477,68 +507,10 @@ export const VideoPlayerModal: React.FC = () => {
       className={`fixed inset-0 z-[60] bg-black flex items-center justify-center select-none overflow-hidden transition-all duration-500 ease-out ${
         isOpen ? 'opacity-100 scale-100' : 'opacity-0 scale-[0.98] pointer-events-none'
       }`}
+      onClick={resetControlsTimer}
+      onMouseMove={resetControlsTimer}
+      onTouchStart={resetControlsTimer}
     >
-      {/* Permanent Safe Floating Controls (ALWAYS visible above iframe/video - user can NEVER get trapped) */}
-      <div className="absolute top-3 left-3 sm:top-5 sm:left-6 z-[80] flex items-center gap-2 pointer-events-auto">
-        <button
-          onClick={handleClose}
-          aria-label="Thoát xem phim"
-          className="flex items-center gap-2 px-3.5 py-2 rounded-full bg-black/80 hover:bg-black/95 active:scale-95 text-white backdrop-blur-md border border-white/20 shadow-[0_4px_25px_rgba(0,0,0,0.9)] transition-all cursor-pointer group"
-        >
-          <ArrowLeft className="w-5 h-5 text-white group-hover:-translate-x-0.5 transition-transform" />
-          <span className="text-xs sm:text-sm font-bold pr-0.5 tracking-wide">Thoát</span>
-        </button>
-
-        {/* 1-Tap Screen Orientation Switcher */}
-        <button
-          onClick={toggleRotate}
-          aria-label="Xoay màn hình"
-          className="flex items-center gap-1.5 px-3 py-2 rounded-full bg-black/80 hover:bg-black/95 active:scale-95 text-white backdrop-blur-md border border-white/20 shadow-[0_4px_25px_rgba(0,0,0,0.9)] transition-all cursor-pointer group"
-        >
-          <RotateCw className="w-4 h-4 text-red-500 group-hover:rotate-45 transition-transform" />
-          <span className="text-xs sm:text-sm font-semibold">
-            {isCssRotated ? 'Xoay dọc' : 'Xoay ngang'}
-          </span>
-        </button>
-
-        {/* Quick Episode Selector for Series */}
-        {currentServer && currentServer.items.length > 1 && (
-          <div className="relative">
-            <button
-              onClick={() => setShowEpisodeSelector((prev) => !prev)}
-              aria-label="Danh sách tập"
-              className="flex items-center gap-1.5 px-3 py-2 rounded-full bg-black/80 hover:bg-black/95 active:scale-95 text-white backdrop-blur-md border border-white/20 shadow-[0_4px_25px_rgba(0,0,0,0.9)] transition-all cursor-pointer"
-            >
-              <ListVideo className="w-4 h-4 text-red-500" />
-              <span className="text-xs sm:text-sm font-semibold hidden xs:inline">
-                {currentEpisodeTitle || 'Chọn tập'}
-              </span>
-              <span className="text-xs font-semibold xs:hidden">Tập</span>
-            </button>
-
-            {showEpisodeSelector && (
-              <div className="absolute left-0 top-full mt-2 w-72 max-w-[calc(100vw-2rem)] max-h-80 overflow-y-auto bg-zinc-900/98 backdrop-blur-xl border border-zinc-700 rounded-xl p-2.5 grid grid-cols-4 gap-1.5 shadow-2xl z-50">
-                {currentServer.items.map((ep) => (
-                  <button
-                    key={ep.slug}
-                    onClick={() => {
-                      setPlayingEpisode(ep.embed, `Tập ${ep.name}`);
-                      setShowEpisodeSelector(false);
-                    }}
-                    className={`p-2 text-xs rounded-lg font-bold transition text-center cursor-pointer ${
-                      activeEmbed === ep.embed
-                        ? 'bg-red-600 text-white shadow-md'
-                        : 'bg-zinc-800 hover:bg-zinc-700 text-zinc-300'
-                    }`}
-                  >
-                    Tập {ep.name}
-                  </button>
-                ))}
-              </div>
-            )}
-          </div>
-        )}
-      </div>
 
       {/* Resume Playback Dialog (Only for local HTML5 video, never blocking iframe) */}
       {showResumeDialog && !activeEmbed && (
@@ -642,65 +614,102 @@ export const VideoPlayerModal: React.FC = () => {
             </div>
           </div>
 
+          {/* Top gesture & tap zone: allows user on mobile/desktop to tap or touch near top to show controls even when controls are hidden */}
+          <div
+            onClick={resetControlsTimer}
+            onTouchStart={resetControlsTimer}
+            className="absolute top-0 left-0 right-0 h-20 sm:h-24 z-20 cursor-pointer pointer-events-auto"
+            aria-label="Hiện thanh điều khiển"
+          />
+
           {/* Header Bar */}
           <div
-            className={`absolute top-0 left-0 right-0 z-30 bg-gradient-to-b from-black/90 via-black/50 to-transparent p-4 sm:p-6 flex items-center justify-between text-white transition-opacity duration-300 ${
-              showControls ? 'opacity-100' : 'opacity-0 pointer-events-none'
+            className={`absolute top-0 left-0 right-0 z-30 bg-gradient-to-b from-black/95 via-black/60 to-transparent px-4 py-3 sm:px-6 sm:py-5 flex items-center justify-between text-white transition-opacity duration-300 ${
+              showControls ? 'opacity-100 pointer-events-auto' : 'opacity-0 pointer-events-none'
             }`}
           >
-            <div className="flex items-center gap-3 pl-44 sm:pl-56">
+            {/* Left: Back button & Movie / Episode info */}
+            <div className="flex items-center gap-2.5 sm:gap-4 min-w-0 pr-2">
               <button
                 onClick={handleClose}
-                aria-label="Quay lại"
-                className="hidden md:flex w-10 h-10 rounded-full hover:bg-white/20 items-center justify-center transition cursor-pointer"
+                aria-label="Thoát xem phim"
+                className="flex items-center gap-1.5 sm:gap-2 px-3 py-1.5 sm:py-2 rounded-full bg-white/10 hover:bg-white/20 active:scale-95 text-white backdrop-blur-md border border-white/15 transition cursor-pointer group shrink-0"
               >
-                <ArrowLeft className="w-6 h-6" />
+                <ArrowLeft className="w-4 h-4 sm:w-5 sm:h-5 text-white group-hover:-translate-x-0.5 transition-transform" />
+                <span className="text-xs sm:text-sm font-semibold tracking-wide pr-0.5">Thoát</span>
               </button>
-              <div>
-                <h2 className="text-sm sm:text-base md:text-xl font-bold uppercase tracking-wide truncate max-w-[180px] sm:max-w-xs md:max-w-md">
+
+              <div className="min-w-0">
+                <h2 className="text-xs sm:text-base md:text-lg font-bold uppercase tracking-wide truncate max-w-[140px] xs:max-w-[200px] sm:max-w-xs md:max-w-md">
                   {playingMovie.title}
                 </h2>
-                <div className="flex items-center gap-2 text-xs text-zinc-300 font-medium">
+                <div className="flex items-center gap-2 text-[11px] sm:text-xs text-zinc-300 font-medium">
                   {currentEpisodeTitle && (
                     <span className="text-red-400 font-bold">{currentEpisodeTitle}</span>
                   )}
-                  {playingMovie.subTitle && <span className="hidden sm:inline">• {playingMovie.subTitle}</span>}
+                  {playingMovie.subTitle && (
+                    <span className="hidden sm:inline text-zinc-400 truncate max-w-[200px]">
+                      • {playingMovie.subTitle}
+                    </span>
+                  )}
                 </div>
               </div>
             </div>
 
-            <div className="flex items-center gap-3">
+            {/* Right: Actions (Rotate, Episodes, Fullscreen) */}
+            <div className="flex items-center gap-2 sm:gap-3 shrink-0">
+              {/* 1-Tap Screen Orientation Switcher */}
+              <button
+                onClick={toggleRotate}
+                aria-label="Xoay màn hình"
+                className="flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 sm:py-2 rounded-full bg-white/10 hover:bg-white/20 active:scale-95 text-white backdrop-blur-md border border-white/15 transition cursor-pointer group text-xs sm:text-sm font-semibold"
+                title={isCssRotated ? 'Xoay dọc màn hình' : 'Xoay ngang màn hình'}
+              >
+                <RotateCw className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-red-500 group-hover:rotate-45 transition-transform" />
+                <span className="hidden xs:inline">
+                  {isCssRotated ? 'Xoay dọc' : 'Xoay ngang'}
+                </span>
+              </button>
+
               {/* Episodes Selector Button if series */}
               {currentServer && currentServer.items.length > 1 && (
                 <div className="relative">
                   <button
-                    onClick={() => setShowEpisodeSelector(!showEpisodeSelector)}
-                    className="flex items-center gap-2 bg-zinc-800/80 hover:bg-zinc-700 px-3 py-1.5 rounded-lg text-xs font-semibold text-white border border-white/20 transition cursor-pointer"
+                    onClick={() => setShowEpisodeSelector((prev) => !prev)}
+                    aria-label="Danh sách tập"
+                    className="flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 sm:py-2 rounded-full bg-white/10 hover:bg-white/20 active:scale-95 text-white backdrop-blur-md border border-white/15 transition cursor-pointer text-xs sm:text-sm font-semibold"
                   >
-                    <ListVideo className="w-4 h-4 text-red-500" />
-                    <span>Chọn tập ({currentServer.items.length} tập)</span>
+                    <ListVideo className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-red-500" />
+                    <span className="hidden sm:inline">Chọn tập ({currentServer.items.length} tập)</span>
+                    <span className="sm:hidden">{currentEpisodeTitle || 'Tập'}</span>
                   </button>
 
                   {/* Dropdown list of episodes */}
                   {showEpisodeSelector && (
-                    <div className="absolute right-0 mt-2 w-72 max-h-80 overflow-y-auto bg-zinc-900/95 backdrop-blur-md border border-zinc-700 rounded-lg p-2 grid grid-cols-4 gap-1.5 shadow-2xl z-50">
-                      {currentServer.items.map((ep) => (
-                        <button
-                          key={ep.slug}
-                          onClick={() => {
-                            setPlayingEpisode(ep.embed, `Tập ${ep.name}`);
-                            setShowEpisodeSelector(false);
-                          }}
-                          className={`p-2 text-xs rounded font-bold transition text-center cursor-pointer ${
-                            activeEmbed === ep.embed
-                              ? 'bg-red-600 text-white'
-                              : 'bg-zinc-800 hover:bg-zinc-700 text-zinc-300'
-                          }`}
-                        >
-                          Tập {ep.name}
-                        </button>
-                      ))}
-                    </div>
+                    <>
+                      <div
+                        className="fixed inset-0 z-40"
+                        onClick={() => setShowEpisodeSelector(false)}
+                      />
+                      <div className="absolute right-0 top-full mt-2 w-72 sm:w-80 max-w-[calc(100vw-2rem)] max-h-80 overflow-y-auto bg-zinc-900/98 backdrop-blur-xl border border-zinc-700 rounded-xl p-2.5 grid grid-cols-4 gap-1.5 shadow-2xl z-50 animate-in fade-in zoom-in-95 duration-150">
+                        {currentServer.items.map((ep) => (
+                          <button
+                            key={ep.slug}
+                            onClick={() => {
+                              setPlayingEpisode(ep.embed, `Tập ${ep.name}`);
+                              setShowEpisodeSelector(false);
+                            }}
+                            className={`p-2 text-xs rounded-lg font-bold transition text-center cursor-pointer ${
+                              activeEmbed === ep.embed
+                                ? 'bg-red-600 text-white shadow-md'
+                                : 'bg-zinc-800 hover:bg-zinc-700 text-zinc-300'
+                            }`}
+                          >
+                            Tập {ep.name}
+                          </button>
+                        ))}
+                      </div>
+                    </>
                   )}
                 </div>
               )}
@@ -709,9 +718,13 @@ export const VideoPlayerModal: React.FC = () => {
               <button
                 onClick={toggleFullscreen}
                 aria-label="Toàn màn hình"
-                className="w-10 h-10 rounded-full hover:bg-white/20 flex items-center justify-center transition cursor-pointer"
+                className="w-8 h-8 sm:w-10 sm:h-10 rounded-full bg-white/10 hover:bg-white/20 flex items-center justify-center transition cursor-pointer border border-white/10"
               >
-                {isFullscreen ? <Minimize className="w-5 h-5" /> : <Maximize className="w-5 h-5" />}
+                {isFullscreen ? (
+                  <Minimize className="w-4 h-4 sm:w-5 sm:h-5" />
+                ) : (
+                  <Maximize className="w-4 h-4 sm:w-5 sm:h-5" />
+                )}
               </button>
             </div>
           </div>
@@ -733,10 +746,11 @@ export const VideoPlayerModal: React.FC = () => {
         <div className="relative w-full h-full flex flex-col items-center justify-center bg-black text-white space-y-4">
           <button
             onClick={handleClose}
-            aria-label="Quay lại"
-            className="absolute top-6 left-6 w-10 h-10 rounded-full bg-white/10 hover:bg-white/20 flex items-center justify-center transition cursor-pointer"
+            aria-label="Thoát xem phim"
+            className="absolute top-4 left-4 sm:top-6 sm:left-6 flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-white/10 hover:bg-white/20 active:scale-95 text-white backdrop-blur-md border border-white/15 transition cursor-pointer"
           >
-            <ArrowLeft className="w-6 h-6" />
+            <ArrowLeft className="w-4 h-4 sm:w-5 sm:h-5" />
+            <span className="text-xs sm:text-sm font-semibold tracking-wide">Thoát</span>
           </button>
           <div className="w-12 h-12 border-3 border-red-600/30 border-t-red-600 rounded-full animate-spin" />
           <div className="text-center px-4">
@@ -772,21 +786,42 @@ export const VideoPlayerModal: React.FC = () => {
             }`}
           >
             {/* Top Header */}
-            <div className="flex items-center gap-3 text-white pl-44 sm:pl-56">
-              <button
-                onClick={handleClose}
-                aria-label="Quay lại"
-                className="hidden md:flex w-10 h-10 rounded-full hover:bg-white/20 items-center justify-center transition cursor-pointer"
-              >
-                <ArrowLeft className="w-6 h-6" />
-              </button>
-              <div>
-                <h2 className="text-sm sm:text-base md:text-xl font-bold uppercase tracking-wide truncate max-w-[180px] sm:max-w-xs md:max-w-md">
-                  {playingMovie.title}
-                </h2>
-                {playingMovie.subTitle && (
-                  <p className="text-xs text-zinc-300 font-medium hidden sm:block">{playingMovie.subTitle}</p>
-                )}
+            <div className="flex items-center justify-between text-white w-full">
+              {/* Left: Back button & Movie / Episode info */}
+              <div className="flex items-center gap-2.5 sm:gap-4 min-w-0 pr-2">
+                <button
+                  onClick={handleClose}
+                  aria-label="Thoát xem phim"
+                  className="flex items-center gap-1.5 sm:gap-2 px-3 py-1.5 sm:py-2 rounded-full bg-white/10 hover:bg-white/20 active:scale-95 text-white backdrop-blur-md border border-white/15 transition cursor-pointer group shrink-0"
+                >
+                  <ArrowLeft className="w-4 h-4 sm:w-5 sm:h-5 text-white group-hover:-translate-x-0.5 transition-transform" />
+                  <span className="text-xs sm:text-sm font-semibold tracking-wide pr-0.5">Thoát</span>
+                </button>
+                <div className="min-w-0">
+                  <h2 className="text-xs sm:text-base md:text-lg font-bold uppercase tracking-wide truncate max-w-[140px] xs:max-w-[200px] sm:max-w-xs md:max-w-md">
+                    {playingMovie.title}
+                  </h2>
+                  {playingMovie.subTitle && (
+                    <p className="text-[11px] sm:text-xs text-zinc-300 font-medium hidden sm:block truncate max-w-[200px]">
+                      {playingMovie.subTitle}
+                    </p>
+                  )}
+                </div>
+              </div>
+
+              {/* Right: Actions */}
+              <div className="flex items-center gap-2 sm:gap-3 shrink-0">
+                <button
+                  onClick={toggleRotate}
+                  aria-label="Xoay màn hình"
+                  className="flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 sm:py-2 rounded-full bg-white/10 hover:bg-white/20 active:scale-95 text-white backdrop-blur-md border border-white/15 transition cursor-pointer group text-xs sm:text-sm font-semibold"
+                  title={isCssRotated ? 'Xoay dọc màn hình' : 'Xoay ngang màn hình'}
+                >
+                  <RotateCw className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-red-500 group-hover:rotate-45 transition-transform" />
+                  <span className="hidden xs:inline">
+                    {isCssRotated ? 'Xoay dọc' : 'Xoay ngang'}
+                  </span>
+                </button>
               </div>
             </div>
 
@@ -889,10 +924,11 @@ export const VideoPlayerModal: React.FC = () => {
         <div className="relative w-full h-full flex flex-col items-center justify-center bg-black text-white p-6 space-y-4 text-center">
           <button
             onClick={handleClose}
-            aria-label="Quay lại"
-            className="absolute top-6 left-6 w-10 h-10 rounded-full bg-white/10 hover:bg-white/20 flex items-center justify-center transition cursor-pointer"
+            aria-label="Thoát xem phim"
+            className="absolute top-4 left-4 sm:top-6 sm:left-6 flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-white/10 hover:bg-white/20 active:scale-95 text-white backdrop-blur-md border border-white/15 transition cursor-pointer"
           >
-            <ArrowLeft className="w-6 h-6" />
+            <ArrowLeft className="w-4 h-4 sm:w-5 sm:h-5" />
+            <span className="text-xs sm:text-sm font-semibold tracking-wide">Thoát</span>
           </button>
           <h3 className="text-xl font-bold text-white uppercase tracking-wide">{playingMovie.title}</h3>
           <p className="text-sm text-zinc-400 max-w-md">

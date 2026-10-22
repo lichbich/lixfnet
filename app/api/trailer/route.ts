@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { fetchTMDBLogo } from '@/services/logoService';
 
 const TMDB_API_KEY =
   process.env.TMDB_API_KEY || '58dba4066f4f36e49e5e769304442088';
@@ -9,6 +10,7 @@ interface CachedTrailer {
   backupKeys: string[];
   tmdbId?: number;
   source: string;
+  logoUrl?: string | null;
 }
 
 const trailerCache = new Map<string, CachedTrailer>();
@@ -289,6 +291,7 @@ export async function GET(request: NextRequest) {
       backupKeys: cached.backupKeys,
       tmdbId: cached.tmdbId,
       source: cached.source,
+      logoUrl: cached.logoUrl || null,
       cached: true,
     });
   }
@@ -349,12 +352,23 @@ export async function GET(request: NextRequest) {
     }
   }
 
+  // 4. Resolve Title Logo from TMDB in parallel with Vietnamese-first priority
+  const logoUrl = await fetchTMDBLogo({
+    tmdbId: tmdbId || parsedTmdbId,
+    mediaType: mediaTypeParam === 'tv' ? 'tv' : 'movie',
+    title,
+    subTitle,
+    slug,
+    year,
+  });
+
   // Cache record
   const record: CachedTrailer = {
     youtubeKey,
     backupKeys,
     tmdbId,
     source,
+    logoUrl,
   };
   trailerCache.set(cacheKey, record);
 
@@ -364,6 +378,7 @@ export async function GET(request: NextRequest) {
       backupKeys,
       tmdbId,
       source,
+      logoUrl,
       cached: false,
     },
     {

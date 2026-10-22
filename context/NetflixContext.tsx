@@ -183,6 +183,7 @@ export const NetflixProvider: React.FC<{ children: React.ReactNode }> = ({ child
               return {
                 ...prev,
                 ...detailed,
+                logoUrl: prev.logoUrl || detailed.logoUrl,
                 // keep previous custom badges or progress if any
                 badges: prev.badges || detailed.badges,
                 progress: prev.progress,

@@ -19,6 +19,7 @@ export const HERO_MOVIE: Movie = {
     'https://images.unsplash.com/photo-1517486808906-6ca8b3f04846?q=80&w=1920&auto=format&fit=crop',
   posterUrl:
     'https://images.unsplash.com/photo-1534447677768-be436bb09401?q=80&w=600&auto=format&fit=crop',
+  logoUrl: 'https://image.tmdb.org/t/p/w500/12BPUBiz0T51YYGBmEGufDOlLlg.png',
   badges: {
     customPill: {
       text: 'Mùa 3 ra mắt vào Thứ Năm',

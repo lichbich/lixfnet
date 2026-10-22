@@ -323,6 +323,7 @@ export function mapNguonCToMovie(item: NguonCItem | NguonCDetailMovie, rank?: nu
     seasonsList,
     tmdb: item.tmdb,
     imdb: item.imdb,
+    logoUrl: (item as any).logoUrl,
   };
 }
 
