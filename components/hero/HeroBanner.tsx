@@ -220,7 +220,7 @@ export const HeroBanner: React.FC<HeroBannerProps> = ({ movie, badgeText }) => {
     // Check client storage cache for logo first
     let cachedLogo: string | null = null;
     try {
-      cachedLogo = sessionStorage.getItem(`netlix_logo_${movieSlug}`);
+      cachedLogo = sessionStorage.getItem(`netlix_logo_v3_${movieSlug}`);
     } catch {}
 
     if (cachedLogo && cachedLogo !== 'none') {
@@ -263,7 +263,7 @@ export const HeroBanner: React.FC<HeroBannerProps> = ({ movie, badgeText }) => {
           if (data.logoUrl) {
             setLogoUrl(data.logoUrl);
             try {
-              sessionStorage.setItem(`netlix_logo_${movieSlug}`, data.logoUrl);
+              sessionStorage.setItem(`netlix_logo_v3_${movieSlug}`, data.logoUrl);
             } catch {}
           }
           if (data.youtubeKey) {
@@ -309,11 +309,11 @@ export const HeroBanner: React.FC<HeroBannerProps> = ({ movie, badgeText }) => {
           if (!isCancelled && data.logoUrl) {
             setLogoUrl(data.logoUrl);
             try {
-              sessionStorage.setItem(`netlix_logo_${movieSlug}`, data.logoUrl);
+              sessionStorage.setItem(`netlix_logo_v3_${movieSlug}`, data.logoUrl);
             } catch {}
           } else if (!isCancelled) {
             try {
-              sessionStorage.setItem(`netlix_logo_${movieSlug}`, 'none');
+              sessionStorage.setItem(`netlix_logo_v3_${movieSlug}`, 'none');
             } catch {}
           }
         })
@@ -813,7 +813,8 @@ export const HeroBanner: React.FC<HeroBannerProps> = ({ movie, badgeText }) => {
                       setLogoUrl(null);
                       setIsLogoLoaded(false);
                     }}
-                    className="max-h-24 sm:max-h-32 md:max-h-40 w-auto object-contain filter drop-shadow-[0_4px_16px_rgba(0,0,0,0.95)] select-none pointer-events-none transition-transform duration-500 hover:scale-105"
+                    className="max-h-24 sm:max-h-32 md:max-h-40 w-auto object-contain select-none pointer-events-none transition-transform duration-500 hover:scale-105"
+                    style={{ filter: 'drop-shadow(0 0 1.5px rgba(255, 255, 255, 0.7)) drop-shadow(0 4px 16px rgba(0, 0, 0, 0.95))' }}
                     loading="eager"
                   />
                   {movie.subTitle && (

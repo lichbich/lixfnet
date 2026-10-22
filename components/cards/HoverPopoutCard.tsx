@@ -172,7 +172,7 @@ export const HoverPopoutCard: React.FC = () => {
     } else {
       let sessionLogo: string | null = null;
       try {
-        sessionLogo = sessionStorage.getItem(`netlix_logo_${movieKey}`);
+        sessionLogo = sessionStorage.getItem(`netlix_logo_v3_${movieKey}`);
       } catch {}
 
       if (sessionLogo && sessionLogo !== 'none') {
@@ -197,11 +197,11 @@ export const HoverPopoutCard: React.FC = () => {
               setLogoUrl(data.logoUrl);
               clientLogoCache.set(movieKey, data.logoUrl);
               try {
-                sessionStorage.setItem(`netlix_logo_${movieKey}`, data.logoUrl);
+                sessionStorage.setItem(`netlix_logo_v3_${movieKey}`, data.logoUrl);
               } catch {}
             } else {
               try {
-                sessionStorage.setItem(`netlix_logo_${movieKey}`, 'none');
+                sessionStorage.setItem(`netlix_logo_v3_${movieKey}`, 'none');
               } catch {}
             }
           })
@@ -239,7 +239,7 @@ export const HoverPopoutCard: React.FC = () => {
             setLogoUrl(data.logoUrl);
             clientLogoCache.set(movieKey, data.logoUrl);
             try {
-              sessionStorage.setItem(`netlix_logo_${movieKey}`, data.logoUrl);
+              sessionStorage.setItem(`netlix_logo_v3_${movieKey}`, data.logoUrl);
             } catch {}
           }
           if (data.youtubeKey) {
@@ -604,7 +604,6 @@ export const HoverPopoutCard: React.FC = () => {
             {/* Title logo: gently blooms in only after image is fully decoded */}
             {logoUrl && (
               <img
-                style={{ gridArea: '1 / 1 / 2 / 2' }}
                 src={logoUrl}
                 alt={activeMovie.title}
                 onLoad={() => setIsLogoLoaded(true)}
@@ -612,9 +611,13 @@ export const HoverPopoutCard: React.FC = () => {
                   setLogoUrl(null);
                   setIsLogoLoaded(false);
                 }}
-                className={`max-h-7 sm:max-h-8 max-w-full w-auto object-contain filter drop-shadow-[0_2px_10px_rgba(0,0,0,0.95)] select-none pointer-events-none transition-opacity duration-500 ease-in-out ${
+                className={`max-h-7 sm:max-h-8 max-w-full w-auto object-contain select-none pointer-events-none transition-opacity duration-500 ease-in-out ${
                   isLogoLoaded ? 'opacity-100' : 'opacity-0 pointer-events-none'
                 }`}
+                style={{
+                  gridArea: '1 / 1 / 2 / 2',
+                  filter: 'drop-shadow(0 0 1.2px rgba(255, 255, 255, 0.7)) drop-shadow(0 2px 10px rgba(0, 0, 0, 0.95))',
+                }}
               />
             )}
           </div>

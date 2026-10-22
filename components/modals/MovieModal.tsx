@@ -93,7 +93,7 @@ export const MovieModal: React.FC = () => {
           setLogoUrl(selectedMovie.logoUrl);
           clientLogoCache.set(movieKey, selectedMovie.logoUrl);
           try {
-            sessionStorage.setItem(`netlix_logo_${movieKey}`, selectedMovie.logoUrl);
+            sessionStorage.setItem(`netlix_logo_v3_${movieKey}`, selectedMovie.logoUrl);
           } catch {}
         } else {
           const cached = clientLogoCache.get(movieKey);
@@ -102,7 +102,7 @@ export const MovieModal: React.FC = () => {
           } else {
             let sessionLogo: string | null = null;
             try {
-              sessionLogo = sessionStorage.getItem(`netlix_logo_${movieKey}`);
+              sessionLogo = sessionStorage.getItem(`netlix_logo_v3_${movieKey}`);
             } catch {}
             setLogoUrl(sessionLogo && sessionLogo !== 'none' ? sessionLogo : null);
           }
@@ -183,7 +183,7 @@ export const MovieModal: React.FC = () => {
           if (data.logoUrl) {
             setLogoUrl(data.logoUrl);
             try {
-              sessionStorage.setItem(`netlix_logo_${movieSlug}`, data.logoUrl);
+              sessionStorage.setItem(`netlix_logo_v3_${movieSlug}`, data.logoUrl);
             } catch {}
           }
           if (data.youtubeKey) {
@@ -223,11 +223,11 @@ export const MovieModal: React.FC = () => {
           if (!isCancelled && data.logoUrl) {
             setLogoUrl(data.logoUrl);
             try {
-              sessionStorage.setItem(`netlix_logo_${movieSlug}`, data.logoUrl);
+              sessionStorage.setItem(`netlix_logo_v3_${movieSlug}`, data.logoUrl);
             } catch {}
           } else if (!isCancelled) {
             try {
-              sessionStorage.setItem(`netlix_logo_${movieSlug}`, 'none');
+              sessionStorage.setItem(`netlix_logo_v3_${movieSlug}`, 'none');
             } catch {}
           }
         })
@@ -785,7 +785,8 @@ export const MovieModal: React.FC = () => {
                       setLogoUrl(null);
                       setIsLogoLoaded(false);
                     }}
-                    className="max-h-20 sm:max-h-28 md:max-h-36 w-auto object-contain filter drop-shadow-[0_4px_16px_rgba(0,0,0,0.95)] select-none pointer-events-none transition-transform duration-500 hover:scale-105"
+                    className="max-h-20 sm:max-h-28 md:max-h-36 w-auto object-contain select-none pointer-events-none transition-transform duration-500 hover:scale-105"
+                    style={{ filter: 'drop-shadow(0 0 1.5px rgba(255, 255, 255, 0.7)) drop-shadow(0 4px 16px rgba(0, 0, 0, 0.95))' }}
                   />
                   {movie.subTitle && (
                     <p className="text-xs sm:text-sm text-zinc-300 font-semibold tracking-wider uppercase mt-1 drop-shadow">

@@ -80,53 +80,185 @@ export function formatTmdbLogoUrl(filePath: string): string {
 }
 
 /**
+ * In-memory luminance cache so each TMDB logo thumbnail is analyzed at most once
+ */
+const logoLuminanceCache = new Map<string, number>();
+
+/**
+ * Fast in-memory luminance calculation for a TMDB logo PNG thumbnail (w92, ~2-4KB).
+ * Decompresses the PNG IDAT chunk with Node zlib and computes average luminance of visible pixels.
+ * Returns luminance (0.0 = pitch black, 255.0 = pure white), or null if analysis fails.
+ */
+export async function getPngLuminance(filePath: string): Promise<number | null> {
+  if (!filePath || filePath.endsWith('.svg')) return null;
+  if (logoLuminanceCache.has(filePath)) {
+    return logoLuminanceCache.get(filePath)!;
+  }
+
+  // Only run in server-side Node.js environment
+  if (typeof window !== 'undefined') return null;
+
+  try {
+    const zlib = await import('zlib');
+    const url = `https://image.tmdb.org/t/p/w92${filePath}`;
+    const res = await fetch(url, { next: { revalidate: 604800 } });
+    if (!res.ok) return null;
+
+    const buffer = Buffer.from(await res.arrayBuffer());
+    if (buffer.length < 33 || buffer.readUInt32BE(0) !== 0x89504e47) {
+      return null;
+    }
+
+    const width = buffer.readUInt32BE(16);
+    const height = buffer.readUInt32BE(20);
+    const colorType = buffer.readUInt8(25);
+
+    const idatChunks: Buffer[] = [];
+    let offset = 8;
+    while (offset < buffer.length) {
+      const len = buffer.readUInt32BE(offset);
+      const type = buffer.toString('ascii', offset + 4, offset + 8);
+      if (type === 'IDAT') {
+        idatChunks.push(buffer.subarray(offset + 8, offset + 8 + len));
+      } else if (type === 'IEND') {
+        break;
+      }
+      offset += 12 + len;
+    }
+
+    if (idatChunks.length === 0) return null;
+    const decompressed = zlib.inflateSync(Buffer.concat(idatChunks));
+    const bytesPerPixel =
+      colorType === 6 ? 4 : colorType === 2 ? 3 : colorType === 4 ? 2 : 1;
+    const rowSize = 1 + width * bytesPerPixel;
+
+    let totalLum = 0;
+    let count = 0;
+
+    for (let y = 0; y < height; y++) {
+      const rowOffset = y * rowSize;
+      // Sample every 2nd pixel for instant processing
+      for (let x = 0; x < width; x += 2) {
+        const px = rowOffset + 1 + x * bytesPerPixel;
+        let r = 0;
+        let g = 0;
+        let b = 0;
+        let a = 255;
+        if (colorType === 6) {
+          r = decompressed[px];
+          g = decompressed[px + 1];
+          b = decompressed[px + 2];
+          a = decompressed[px + 3];
+        } else if (colorType === 4) {
+          r = g = b = decompressed[px];
+          a = decompressed[px + 1];
+        } else if (colorType === 2) {
+          r = decompressed[px];
+          g = decompressed[px + 1];
+          b = decompressed[px + 2];
+        } else if (colorType === 0) {
+          r = g = b = decompressed[px];
+        }
+
+        if (a > 40) {
+          totalLum += 0.299 * r + 0.587 * g + 0.114 * b;
+          count++;
+        }
+      }
+    }
+
+    const lum = count > 0 ? totalLum / count : 0;
+    logoLuminanceCache.set(filePath, lum);
+    return lum;
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Strict priority selection for movie title logo:
  * 1. Tiếng Việt ('vi')
  * 2. Tiếng Anh ('en')
  * 3. Ngôn ngữ trung tính / Không lời (null hoặc "")
  * 4. Bất kỳ ngôn ngữ khả dụng nào của phim (ja, ko, zh, fr, v.v.)
+ *
+ * ANTI-BLACK LOGO ALGORITHM:
+ * Analyzes the luminance of candidate logos. If a candidate is very dark (luminance < 80),
+ * and a brighter candidate exists in the same priority group, the bright/white/colored logo
+ * is chosen so it remains clearly legible on dark backdrops!
  */
-export function selectBestLogo(logos: TMDBLogoItem[]): string | null {
+export async function selectBestLogo(logos: TMDBLogoItem[]): Promise<string | null> {
   if (!logos || logos.length === 0) return null;
 
   const valid = logos.filter((l) => Boolean(l.file_path));
   if (valid.length === 0) return null;
 
-  const sortByQuality = (items: TMDBLogoItem[]) => {
-    return [...items].sort((a, b) => {
-      const scoreA = (a.vote_count || 0) * (a.vote_average || 1);
-      const scoreB = (b.vote_count || 0) * (b.vote_average || 1);
-      if (scoreB !== scoreA) return scoreB - scoreA;
-      // Prefer horizontal aspect ratio for banner display
-      if (b.aspect_ratio !== a.aspect_ratio) return b.aspect_ratio - a.aspect_ratio;
-      return (b.width || 0) - (a.width || 0);
+  const pickBestFromGroup = async (items: TMDBLogoItem[]): Promise<TMDBLogoItem | null> => {
+    if (items.length === 0) return null;
+    if (items.length === 1) return items[0];
+
+    // Measure luminance of the top 6 candidates in parallel
+    const candidates = items.slice(0, 6);
+    const withLum = await Promise.all(
+      candidates.map(async (c) => {
+        const lum = await getPngLuminance(c.file_path);
+        return { item: c, lum: lum ?? 128 };
+      })
+    );
+
+    // If there are bright options (lum >= 80), filter out dark ones (lum < 80)
+    const brights = withLum.filter((c) => c.lum >= 80);
+    const pool = brights.length > 0 ? brights : withLum;
+
+    pool.sort((a, b) => {
+      // 1. Prefer bright over dark
+      const aIsBright = a.lum >= 80 ? 1 : 0;
+      const bIsBright = b.lum >= 80 ? 1 : 0;
+      if (bIsBright !== aIsBright) return bIsBright - aIsBright;
+
+      // 2. Score (vote count * vote average)
+      const scoreA = (a.item.vote_count || 0) * (a.item.vote_average || 1);
+      const scoreB = (b.item.vote_count || 0) * (b.item.vote_average || 1);
+      if (Math.abs(scoreB - scoreA) > 10) return scoreB - scoreA;
+
+      // 3. Aspect ratio suitability (prefer horizontal banner 1.5 to 6.0)
+      const arA = a.item.aspect_ratio || 1;
+      const arB = b.item.aspect_ratio || 1;
+      const arFitA = arA >= 1.5 && arA <= 6.0 ? 1 : 0;
+      const arFitB = arB >= 1.5 && arB <= 6.0 ? 1 : 0;
+      if (arFitB !== arFitA) return arFitB - arFitA;
+
+      // 4. Resolution
+      return (b.item.width || 0) - (a.item.width || 0);
     });
+
+    return pool[0].item;
   };
 
   // Priority 1: Vietnamese
   const viLogos = valid.filter((l) => l.iso_639_1 === 'vi');
   if (viLogos.length > 0) {
-    const best = sortByQuality(viLogos)[0];
-    return formatTmdbLogoUrl(best.file_path);
+    const best = await pickBestFromGroup(viLogos);
+    if (best) return formatTmdbLogoUrl(best.file_path);
   }
 
   // Priority 2: English
   const enLogos = valid.filter((l) => l.iso_639_1 === 'en');
   if (enLogos.length > 0) {
-    const best = sortByQuality(enLogos)[0];
-    return formatTmdbLogoUrl(best.file_path);
+    const best = await pickBestFromGroup(enLogos);
+    if (best) return formatTmdbLogoUrl(best.file_path);
   }
 
   // Priority 3: Neutral / language-agnostic
   const neutralLogos = valid.filter((l) => !l.iso_639_1);
   if (neutralLogos.length > 0) {
-    const best = sortByQuality(neutralLogos)[0];
-    return formatTmdbLogoUrl(best.file_path);
+    const best = await pickBestFromGroup(neutralLogos);
+    if (best) return formatTmdbLogoUrl(best.file_path);
   }
 
   // Priority 4: Any available language for this movie
-  const bestAny = sortByQuality(valid)[0];
-  return formatTmdbLogoUrl(bestAny.file_path);
+  const bestAny = await pickBestFromGroup(valid);
+  return bestAny ? formatTmdbLogoUrl(bestAny.file_path) : null;
 }
 
 /**
@@ -144,7 +276,7 @@ async function fetchLogosForTMDBItem(
 
     if (res.ok) {
       const data = await res.json();
-      const logo = selectBestLogo(data.logos || []);
+      const logo = await selectBestLogo(data.logos || []);
       if (logo) return logo;
     }
 
@@ -156,7 +288,7 @@ async function fetchLogosForTMDBItem(
     );
     if (altRes.ok) {
       const altData = await altRes.json();
-      const altLogo = selectBestLogo(altData.logos || []);
+      const altLogo = await selectBestLogo(altData.logos || []);
       if (altLogo) return altLogo;
     }
 
