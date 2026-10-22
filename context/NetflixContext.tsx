@@ -154,19 +154,73 @@ export const NetflixProvider: React.FC<{ children: React.ReactNode }> = ({ child
   const [hoverRect, setHoverRect] = useState<HoverRect | null>(null);
   const [isCardTrailerPlaying, setIsCardTrailerPlaying] = useState<boolean>(false);
 
-  // Initialize My List from localStorage
+  // Initialize & sync user-scoped My List from localStorage and Firebase cloud
   useEffect(() => {
+    if (!currentUser?.username) {
+      setMyList([]);
+      return;
+    }
+
+    const username = currentUser.username;
+    const userStorageKey = `netflix_my_list_${username}`;
+
+    // 1. Immediately hydrate from cached local storage for this user
     try {
-      const saved = localStorage.getItem('netflix_my_list');
-      if (saved) {
-        setMyList(JSON.parse(saved));
+      const cached = localStorage.getItem(userStorageKey);
+      if (cached) {
+        setMyList(JSON.parse(cached));
       } else {
-        setMyList([]);
+        // Migration fallback: check legacy un-scoped key
+        const legacy = localStorage.getItem('netflix_my_list');
+        if (legacy) {
+          const parsed = JSON.parse(legacy);
+          setMyList(parsed);
+          localStorage.setItem(userStorageKey, legacy);
+        } else {
+          setMyList([]);
+        }
       }
     } catch {
       setMyList([]);
     }
-  }, []);
+
+    // 2. Fetch cloud-synced My List from Firebase via /api/user/mylist
+    fetch('/api/user/mylist')
+      .then((res) => {
+        if (!res.ok) throw new Error('Not logged in');
+        return res.json();
+      })
+      .then((data) => {
+        if (data.myList && Array.isArray(data.myList)) {
+          setMyList((prev) => {
+            const map = new Map<string, Movie>();
+            // Add cloud items
+            data.myList.forEach((m: Movie) => {
+              const k = m.slug || m.id;
+              if (k) map.set(k, m);
+            });
+            // Also preserve any local items not yet in cloud and sync them
+            prev.forEach((m) => {
+              const k = m.slug || m.id;
+              if (k && !map.has(k)) {
+                map.set(k, m);
+                fetch('/api/user/mylist', {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ key: k, movie: m }),
+                }).catch(() => {});
+              }
+            });
+            const merged = Array.from(map.values());
+            try {
+              localStorage.setItem(userStorageKey, JSON.stringify(merged));
+            } catch {}
+            return merged;
+          });
+        }
+      })
+      .catch(() => {});
+  }, [currentUser?.username]);
 
   const openModal = useCallback(async (movie: Movie) => {
     setSelectedMovie(movie);
@@ -268,16 +322,37 @@ export const NetflixProvider: React.FC<{ children: React.ReactNode }> = ({ child
   }, []);
 
   const toggleMyList = useCallback((movie: Movie) => {
+    if (!movie) return;
+    const movieKey = movie.slug || movie.id;
+    const activeUser = currentUserRef.current;
+    const userStorageKey = activeUser?.username
+      ? `netflix_my_list_${activeUser.username}`
+      : 'netflix_my_list_guest';
+
     setMyList((prev) => {
       const exists = prev.some((item) => item.id === movie.id || (item.slug && item.slug === movie.slug));
       let nextList: Movie[];
       if (exists) {
         nextList = prev.filter((item) => item.id !== movie.id && item.slug !== movie.slug);
+        if (activeUser?.username) {
+          fetch('/api/user/mylist', {
+            method: 'DELETE',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ key: movieKey }),
+          }).catch(() => {});
+        }
       } else {
         nextList = [movie, ...prev];
+        if (activeUser?.username) {
+          fetch('/api/user/mylist', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ key: movieKey, movie }),
+          }).catch(() => {});
+        }
       }
       try {
-        localStorage.setItem('netflix_my_list', JSON.stringify(nextList));
+        localStorage.setItem(userStorageKey, JSON.stringify(nextList));
       } catch {
         // ignore
       }
@@ -508,12 +583,13 @@ export const NetflixProvider: React.FC<{ children: React.ReactNode }> = ({ child
 
   // Derive continueWatchingList
   const continueWatchingList = Object.values(watchProgressMap)
-    .sort((a, b) => b.updatedAt - a.updatedAt)
+    .filter((wp) => wp && wp.movie && (wp.progressPercent || 0) < 95)
+    .sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0))
     .map((wp) => ({
       ...wp.movie,
       progress: wp.progressPercent,
-      currentEpisode: wp.episodeTitle || wp.movie.currentEpisode,
-      embedUrl: wp.episodeEmbed || wp.movie.embedUrl,
+      currentEpisode: wp.episodeTitle || wp.movie?.currentEpisode,
+      embedUrl: wp.episodeEmbed || wp.movie?.embedUrl,
     }));
 
   // Hover Popout Coordination State & Timers

@@ -149,7 +149,8 @@ export async function deleteUser(username: string): Promise<void> {
 }
 
 /**
- * Strips undefined values recursively so Firebase Realtime Database does not reject the payload
+ * Strips undefined values recursively and sanitizes object keys
+ * so Firebase Realtime Database does not reject the payload (no ".", "#", "$", "/", "[", or "]")
  */
 export function cleanFirebasePayload<T>(obj: T): T {
   if (obj === null || obj === undefined) return null as any;
@@ -159,7 +160,9 @@ export function cleanFirebasePayload<T>(obj: T): T {
     for (const key of Object.keys(obj as any)) {
       const val = (obj as any)[key];
       if (val !== undefined) {
-        res[key] = cleanFirebasePayload(val);
+        // Sanitize any key that might have invalid Firebase characters
+        const safeKey = key.replace(/[\/\.\#\$\[\]]/g, '_');
+        res[safeKey] = cleanFirebasePayload(val);
       }
     }
     return res;
@@ -201,6 +204,43 @@ export async function removeUserWatchProgress(username: string, key: string): Pr
   const cleanKey = key.replace(/[\/\.\#\$\[\]]/g, '_');
   const progressRef = getLixfnetRef(`users/${cleanUsername}/watchProgress/${cleanKey}`);
   await progressRef.remove();
+}
+
+/**
+ * Gets all saved My List movies for a user from lixfnet/users/{username}/myList
+ */
+export async function getUserMyList(username: string): Promise<any[]> {
+  const cleanUsername = username.trim().toLowerCase();
+  const listRef = getLixfnetRef(`users/${cleanUsername}/myList`);
+  const snap = await listRef.once('value');
+  if (!snap.exists()) return [];
+  const val = snap.val() || {};
+  return Object.values(val);
+}
+
+/**
+ * Saves a movie to user's My List in lixfnet/users/{username}/myList/{key}
+ */
+export async function saveUserMyListItem(
+  username: string,
+  key: string,
+  movieData: any
+): Promise<void> {
+  const cleanUsername = username.trim().toLowerCase();
+  const cleanKey = key.replace(/[\/\.\#\$\[\]]/g, '_');
+  const itemRef = getLixfnetRef(`users/${cleanUsername}/myList/${cleanKey}`);
+  const safeData = cleanFirebasePayload(movieData);
+  await itemRef.set(safeData);
+}
+
+/**
+ * Removes a movie from user's My List
+ */
+export async function removeUserMyListItem(username: string, key: string): Promise<void> {
+  const cleanUsername = username.trim().toLowerCase();
+  const cleanKey = key.replace(/[\/\.\#\$\[\]]/g, '_');
+  const itemRef = getLixfnetRef(`users/${cleanUsername}/myList/${cleanKey}`);
+  await itemRef.remove();
 }
 
 

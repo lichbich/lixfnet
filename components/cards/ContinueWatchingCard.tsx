@@ -8,9 +8,15 @@ import { useNetflix } from '@/context/NetflixContext';
 
 interface ContinueWatchingCardProps {
   movie: Movie;
+  fillWidth?: boolean;
+  className?: string;
 }
 
-export const ContinueWatchingCard: React.FC<ContinueWatchingCardProps> = ({ movie }) => {
+export const ContinueWatchingCard: React.FC<ContinueWatchingCardProps> = ({
+  movie,
+  fillWidth = false,
+  className = '',
+}) => {
   const { openModal, startPlaying, clearWatchProgress, onCardHover, onCardLeave } = useNetflix();
   const cardRef = useRef<HTMLDivElement>(null);
 
@@ -25,13 +31,17 @@ export const ContinueWatchingCard: React.FC<ContinueWatchingCardProps> = ({ movi
     onCardLeave();
   };
 
+  const sizeClass = fillWidth
+    ? 'w-full'
+    : 'w-[220px] sm:w-[250px] md:w-[270px] flex-shrink-0';
+
   return (
     <div
       ref={cardRef}
       onClick={() => openModal(movie)}
       onMouseEnter={handleMouseEnter}
       onMouseLeave={handleMouseLeave}
-      className="relative flex-shrink-0 w-[220px] sm:w-[250px] md:w-[270px] aspect-[16/10] rounded-md overflow-hidden bg-zinc-800 shadow-lg border border-white/5 cursor-pointer group select-none transition-all duration-300 hover:scale-105 hover:z-20 hover:border-white/20"
+      className={`relative ${sizeClass} aspect-[16/10] rounded-md overflow-hidden bg-zinc-800 shadow-lg border border-white/5 cursor-pointer group select-none transition-all duration-300 hover:scale-105 hover:z-20 hover:border-white/20 ${className}`}
     >
       {/* Thumbnail */}
       <img
