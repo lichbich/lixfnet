@@ -3,7 +3,22 @@
 import React, { useState, useEffect, useRef } from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { Search, Bell, X, User, HelpCircle, Settings, LogOut, ChevronDown, UserPlus } from 'lucide-react';
+import {
+  Search,
+  Bell,
+  X,
+  User,
+  HelpCircle,
+  Settings,
+  LogOut,
+  ChevronDown,
+  UserPlus,
+  Home,
+  Tv,
+  Film,
+  Flame,
+  Bookmark,
+} from 'lucide-react';
 import { NetflixLogo } from '@/components/ui/NetflixLogo';
 import { useNetflix } from '@/context/NetflixContext';
 
@@ -80,55 +95,69 @@ export const Navbar: React.FC = () => {
     { label: 'Duyệt tìm theo ngôn ngữ', href: '/original-audio' },
   ];
 
+  const mobileNavItems = [
+    { label: 'Trang chủ', href: '/', icon: Home },
+    { label: 'Series', href: '/series', icon: Tv },
+    { label: 'Phim', href: '/movies', icon: Film },
+    { label: 'Mới & Hot', href: '/latest', icon: Flame },
+    { label: 'Danh sách', href: '/my-list', icon: Bookmark },
+  ];
+
   return (
-    <header
-      className={`fixed top-0 left-0 right-0 z-50 transition-colors duration-300 ${
-        isScrolled
-          ? 'bg-[#141414]/95 backdrop-blur-md shadow-2xl border-b border-white/5'
-          : 'bg-gradient-to-b from-black/80 via-black/40 to-transparent'
-      }`}
-    >
-      <div className="max-w-[1920px] mx-auto px-4 sm:px-8 md:px-12 h-16 flex items-center justify-between gap-4">
-        {/* Left Side: Logo & Navigation */}
-        <div className="flex items-center gap-6 lg:gap-8">
-          <Link href="/" className="flex-shrink-0 transition-transform hover:scale-105">
-            <NetflixLogo className="h-6 sm:h-7 w-auto" />
-          </Link>
+    <>
+      <header
+        className={`fixed top-0 left-0 right-0 z-50 transition-colors duration-300 ${
+          isScrolled
+            ? 'bg-[#141414]/95 backdrop-blur-md shadow-2xl border-b border-white/5'
+            : 'bg-gradient-to-b from-black/80 via-black/40 to-transparent'
+        }`}
+      >
+        <div className="max-w-[1920px] mx-auto px-4 sm:px-8 md:px-12 h-16 flex items-center justify-between gap-4">
+          {/* Left Side: Logo & Navigation */}
+          <div className="flex items-center gap-6 lg:gap-8">
+            <Link
+              href="/"
+              className={`flex-shrink-0 transition-transform hover:scale-105 ${
+                isSearchOpen ? 'hidden sm:block' : 'block'
+              }`}
+            >
+              <NetflixLogo className="h-6 sm:h-7 w-auto" />
+            </Link>
 
-          {/* Desktop Navigation Links */}
-          <nav className="hidden md:flex items-center gap-2 lg:gap-3">
-            {navLinks.map((link) => {
-              const isActive =
-                pathname === link.href ||
-                (link.href === '/original-audio' && pathname?.includes('original-audio'));
-              return (
-                <Link
-                  key={link.label}
-                  href={link.href}
-                  className={`text-xs lg:text-sm font-medium transition-all duration-200 ${
-                    isActive
-                      ? 'bg-[#2b2b2b] text-white px-3.5 py-1.5 rounded-full border border-white/10 shadow-sm'
-                      : 'text-zinc-300 hover:text-white px-2 py-1'
-                  }`}
-                >
-                  {link.label}
-                </Link>
-              );
-            })}
-          </nav>
-        </div>
+            {/* Desktop Navigation Links */}
+            <nav className="hidden md:flex items-center gap-2 lg:gap-3">
+              {navLinks.map((link) => {
+                const isActive =
+                  pathname === link.href ||
+                  (link.href === '/original-audio' && pathname?.includes('original-audio'));
+                return (
+                  <Link
+                    key={link.label}
+                    href={link.href}
+                    className={`text-xs lg:text-sm font-medium transition-all duration-200 ${
+                      isActive
+                        ? 'bg-[#2b2b2b] text-white px-3.5 py-1.5 rounded-full border border-white/10 shadow-sm'
+                        : 'text-zinc-300 hover:text-white px-2 py-1'
+                    }`}
+                  >
+                    {link.label}
+                  </Link>
+                );
+              })}
+            </nav>
+          </div>
 
-        {/* Right Side: Search, Notifications, Avatar */}
-        <div className="flex items-center gap-4 sm:gap-5">
-          {/* Animated Smooth Expanding Search Bar */}
-          <div
-            ref={searchContainerRef}
-            className={`relative flex items-center transition-all duration-300 ease-out overflow-hidden ${
-              isSearchOpen
-                ? 'w-64 sm:w-80 md:w-96 bg-black/90 border border-white/60 shadow-2xl px-3.5 py-1.5 sm:py-2 rounded-full'
-                : 'w-10 h-10 bg-transparent border border-transparent rounded-full justify-center'
-            }`}
-          >
+          {/* Right Side: Search, Notifications, Avatar */}
+          <div className="flex items-center gap-3 sm:gap-5">
+            {/* Animated Smooth Expanding Search Bar */}
+            <div
+              ref={searchContainerRef}
+              className={`relative flex items-center transition-all duration-300 ease-out overflow-hidden ${
+                isSearchOpen
+                  ? 'w-[calc(100vw-120px)] sm:w-80 md:w-96 bg-black/90 border border-white/60 shadow-2xl px-3 sm:px-3.5 py-1.5 sm:py-2 rounded-full'
+                  : 'w-10 h-10 bg-transparent border border-transparent rounded-full justify-center'
+              }`}
+            >
             <button
               onClick={() => {
                 setIsSearchOpen((prev) => !prev);
@@ -189,9 +218,9 @@ export const Navbar: React.FC = () => {
 
             {/* Notification Dropdown with Caret and Smooth Animation */}
             {showNotifications && (
-              <div className="absolute right-0 mt-3 w-80 sm:w-88 bg-[#181818]/95 backdrop-blur-md border border-zinc-700/80 rounded-lg shadow-[0_20px_50px_rgba(0,0,0,0.9)] overflow-hidden py-2 z-50 animate-in fade-in slide-in-from-top-2 duration-200 ease-out origin-top-right">
+              <div className="fixed inset-x-3 top-16 sm:absolute sm:inset-x-auto sm:right-0 sm:top-auto sm:mt-3 w-auto sm:w-88 max-w-sm bg-[#181818]/95 backdrop-blur-md border border-zinc-700/80 rounded-xl shadow-[0_20px_50px_rgba(0,0,0,0.9)] overflow-hidden py-2 z-50 animate-in fade-in slide-in-from-top-2 duration-200 ease-out origin-top-right">
                 {/* Arrow Caret */}
-                <div className="absolute -top-1.5 right-3 w-3 h-3 bg-[#181818] border-t border-l border-zinc-700/80 rotate-45 z-10" />
+                <div className="hidden sm:block absolute -top-1.5 right-3 w-3 h-3 bg-[#181818] border-t border-l border-zinc-700/80 rotate-45 z-10" />
 
                 <div className="px-4 py-2 border-b border-zinc-700/60 font-semibold text-xs text-zinc-400 uppercase tracking-wider flex items-center justify-between">
                   <span>Thông báo gần đây</span>
@@ -331,5 +360,26 @@ export const Navbar: React.FC = () => {
         </div>
       </div>
     </header>
+
+    {/* Netflix-style Mobile Bottom Navigation Bar */}
+    <nav className="md:hidden fixed bottom-0 inset-x-0 z-40 bg-[#121212]/95 backdrop-blur-xl border-t border-white/10 flex items-center justify-around h-14 pb-safe px-1 shadow-[0_-10px_30px_rgba(0,0,0,0.8)]">
+      {mobileNavItems.map((item) => {
+        const isActive = pathname === item.href;
+        const Icon = item.icon;
+        return (
+          <Link
+            key={item.href}
+            href={item.href}
+            className={`flex flex-col items-center justify-center flex-1 py-1 transition-all active:scale-95 ${
+              isActive ? 'text-red-500 font-bold' : 'text-zinc-400 hover:text-white'
+            }`}
+          >
+            <Icon className={`w-5 h-5 mb-0.5 ${isActive ? 'stroke-[2.5]' : 'stroke-[1.8]'}`} />
+            <span className="text-[10px] tracking-tight">{item.label}</span>
+          </Link>
+        );
+      })}
+    </nav>
+  </>
   );
 };

@@ -52,7 +52,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
       {mounted ? (
         <NetflixProvider>
           <Navbar />
-          <main className="flex-1 w-full">{children}</main>
+          <main className="flex-1 w-full pb-16 md:pb-0">{children}</main>
           <MovieModal />
           <VideoPlayerModal />
           <HoverPopoutCard />

@@ -64,31 +64,81 @@ export function normalizeSearchText(str?: string): string {
     .trim();
 }
 
+export const VALID_COUNTRY_SLUGS = new Set<string>([
+  'han-quoc',
+  'my',
+  'nhat-ban',
+  'trung-quoc',
+  'viet-nam',
+  'thai-lan',
+  'anh',
+  'hong-kong',
+  'dai-loan',
+  'phap',
+  'duc',
+  'tay-ban-nha',
+  'italy',
+  'an-do',
+  'canada',
+  'uc',
+  'philippines',
+  'nga',
+  'bi',
+  'brazil',
+]);
+
 export const COUNTRY_NAME_TO_SLUG: Record<string, string> = {
   'hàn quốc': 'han-quoc',
+  'hàn': 'han-quoc',
+  'korea': 'han-quoc',
+  'south korea': 'han-quoc',
   'mỹ': 'my',
   'hoa kỳ': 'my',
+  'âu mỹ': 'my',
+  'bắc mỹ': 'my',
+  'usa': 'my',
+  'united states': 'my',
   'nhật bản': 'nhat-ban',
+  'nhật': 'nhat-ban',
+  'japan': 'nhat-ban',
   'trung quốc': 'trung-quoc',
+  'trung': 'trung-quoc',
+  'china': 'trung-quoc',
   'việt nam': 'viet-nam',
+  'việt': 'viet-nam',
+  'vietnam': 'viet-nam',
   'thái lan': 'thai-lan',
+  'thái': 'thai-lan',
+  'thailand': 'thai-lan',
   'anh': 'anh',
   'vương quốc anh': 'anh',
+  'châu âu': 'anh',
+  'uk': 'anh',
+  'united kingdom': 'anh',
   'hồng kông': 'hong-kong',
   'hong kong': 'hong-kong',
   'đài loan': 'dai-loan',
+  'taiwan': 'dai-loan',
   'pháp': 'phap',
+  'france': 'phap',
   'đức': 'duc',
+  'germany': 'duc',
   'tây ban nha': 'tay-ban-nha',
+  'spain': 'tay-ban-nha',
   'ý': 'italy',
   'italy': 'italy',
+  'italia': 'italy',
   'ấn độ': 'an-do',
+  'india': 'an-do',
   'canada': 'canada',
   'ca-na-đa': 'canada',
   'úc': 'uc',
+  'australia': 'uc',
   'philippines': 'philippines',
   'nga': 'nga',
+  'russia': 'nga',
   'bỉ': 'bi',
+  'belgium': 'bi',
   'brazil': 'brazil',
 };
 
@@ -116,11 +166,13 @@ export const GENRE_NAME_TO_SLUG: Record<string, string> = {
 };
 
 export function getCountrySlug(countryName?: string, fallbackSlug?: string): string | undefined {
-  if (fallbackSlug) return fallbackSlug;
+  if (fallbackSlug && VALID_COUNTRY_SLUGS.has(fallbackSlug)) return fallbackSlug;
   if (!countryName) return undefined;
   const lower = countryName.toLowerCase().trim();
   if (COUNTRY_NAME_TO_SLUG[lower]) return COUNTRY_NAME_TO_SLUG[lower];
-  return normalizeSearchText(lower).replace(/\s+/g, '-');
+  const candidate = normalizeSearchText(lower).replace(/\s+/g, '-');
+  if (VALID_COUNTRY_SLUGS.has(candidate)) return candidate;
+  return undefined;
 }
 
 export function getGenreSlug(genreName?: string): string | undefined {
@@ -299,11 +351,10 @@ export async function getMoviesByCategory(slug: string, page = 1): Promise<Movie
     const res = await fetch(`${API_BASE_URL}/films/danh-sach/${slug}?page=${page}`, {
       next: { revalidate: 300 },
     });
-    if (!res.ok) throw new Error(`HTTP error! status: ${res.status}`);
+    if (!res.ok) return [];
     const data: NguonCListResponse = await res.json();
     return (data.items || []).map((item, idx) => mapNguonCToMovie(item, idx + 1));
-  } catch (error) {
-    console.error(`Error fetching category ${slug}:`, error);
+  } catch {
     return [];
   }
 }
@@ -316,11 +367,10 @@ export async function getMoviesByGenre(slug: string, page = 1): Promise<Movie[]>
     const res = await fetch(`${API_BASE_URL}/films/the-loai/${slug}?page=${page}`, {
       next: { revalidate: 300 },
     });
-    if (!res.ok) throw new Error(`HTTP error! status: ${res.status}`);
+    if (!res.ok) return [];
     const data: NguonCListResponse = await res.json();
     return (data.items || []).map((item, idx) => mapNguonCToMovie(item, idx + 1));
-  } catch (error) {
-    console.error(`Error fetching genre ${slug}:`, error);
+  } catch {
     return [];
   }
 }
@@ -340,19 +390,20 @@ export async function getMoviesByGenrePaginated(
         },
         next: { revalidate: 300 },
       });
-      if (!res.ok) throw new Error(`HTTP error! status: ${res.status}`);
+      if (!res.ok) {
+        return { movies: [], totalPages: 0, totalItems: 0 };
+      }
       const data: NguonCListResponse = await res.json();
       return {
         movies: (data.items || []).map((item, idx) => mapNguonCToMovie(item, (page - 1) * 10 + idx + 1)),
         totalPages: data.paginate?.total_page || 1,
         totalItems: data.paginate?.total_items || 0,
       };
-    } catch (error) {
+    } catch {
       if (attempt === 0) {
         await new Promise((r) => setTimeout(r, 350));
         continue;
       }
-      console.error(`Error fetching genre paginated ${slug} (page ${page}):`, error);
       return { movies: [], totalPages: 0, totalItems: 0 };
     }
   }
@@ -425,15 +476,18 @@ export const API_COUNTRIES: CountryOption[] = [
  * Fetch movies by country slug (han-quoc, nhat-ban, my, viet-nam)
  */
 export async function getMoviesByCountry(slug: string, page = 1): Promise<Movie[]> {
+  if (!slug || !VALID_COUNTRY_SLUGS.has(slug)) return [];
   try {
     const res = await fetch(`${API_BASE_URL}/films/quoc-gia/${slug}?page=${page}`, {
       next: { revalidate: 300 },
     });
-    if (!res.ok) throw new Error(`HTTP error! status: ${res.status}`);
+    if (!res.ok) {
+      // 404 or non-200: gracefully return empty array without throwing console error
+      return [];
+    }
     const data: NguonCListResponse = await res.json();
     return (data.items || []).map((item, idx) => mapNguonCToMovie(item, idx + 1));
-  } catch (error) {
-    console.error(`Error fetching country ${slug}:`, error);
+  } catch {
     return [];
   }
 }
@@ -445,6 +499,9 @@ export async function getMoviesByCountryPaginated(
   slug: string,
   page = 1
 ): Promise<{ movies: Movie[]; totalPages: number; totalItems: number }> {
+  if (!slug || !VALID_COUNTRY_SLUGS.has(slug)) {
+    return { movies: [], totalPages: 0, totalItems: 0 };
+  }
   for (let attempt = 0; attempt < 2; attempt++) {
     try {
       const res = await fetch(`${API_BASE_URL}/films/quoc-gia/${slug}?page=${page}`, {
@@ -453,19 +510,20 @@ export async function getMoviesByCountryPaginated(
         },
         next: { revalidate: 300 },
       });
-      if (!res.ok) throw new Error(`HTTP error! status: ${res.status}`);
+      if (!res.ok) {
+        return { movies: [], totalPages: 0, totalItems: 0 };
+      }
       const data: NguonCListResponse = await res.json();
       return {
         movies: (data.items || []).map((item, idx) => mapNguonCToMovie(item, (page - 1) * 10 + idx + 1)),
         totalPages: data.paginate?.total_page || 1,
         totalItems: data.paginate?.total_items || 0,
       };
-    } catch (error) {
+    } catch {
       if (attempt === 0) {
         await new Promise((r) => setTimeout(r, 350));
         continue;
       }
-      console.error(`Error fetching country paginated ${slug} (page ${page}):`, error);
       return { movies: [], totalPages: 0, totalItems: 0 };
     }
   }
@@ -1049,7 +1107,9 @@ export async function getSimilarMovies(movie: Movie | null | undefined, limit = 
       }
     }
 
-    const countrySlug = target.countrySlug || getCountrySlug(target.country);
+    const countrySlug = (target.countrySlug && VALID_COUNTRY_SLUGS.has(target.countrySlug))
+      ? target.countrySlug
+      : getCountrySlug(target.country);
     const genres = target.genres || [];
     const cast = target.cast || [];
     const isSeries = target.type === 'series';
@@ -1058,7 +1118,7 @@ export async function getSimilarMovies(movie: Movie | null | undefined, limit = 
     const fetchPromises: Promise<{ items: Movie[]; sourceCountry?: string; sourceGenre?: string }>[] = [];
 
     // Source A: Same Country pages 1 & 2 (Guaranteed same country)
-    if (countrySlug) {
+    if (countrySlug && VALID_COUNTRY_SLUGS.has(countrySlug)) {
       fetchPromises.push(
         getMoviesByCountry(countrySlug, 1).then((movies) => ({ items: movies, sourceCountry: countrySlug })),
         getMoviesByCountry(countrySlug, 2).then((movies) => ({ items: movies, sourceCountry: countrySlug }))

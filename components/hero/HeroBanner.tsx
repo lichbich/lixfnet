@@ -591,7 +591,7 @@ export const HeroBanner: React.FC<HeroBannerProps> = ({ movie, badgeText }) => {
         {/* Framed Rounded Hero Card with increased height and cinema aspect */}
         <div
           ref={containerRef}
-          className="relative z-10 w-full h-[76vh] sm:h-[82vh] min-h-[580px] sm:min-h-[660px] max-h-[880px] rounded-2xl md:rounded-3xl overflow-hidden shadow-[0_30px_70px_-15px_rgba(0,0,0,0.95)] border border-white/10 bg-zinc-900 group"
+          className="relative z-10 w-full h-[62vh] sm:h-[82vh] min-h-[480px] sm:min-h-[660px] max-h-[880px] rounded-2xl md:rounded-3xl overflow-hidden shadow-[0_30px_70px_-15px_rgba(0,0,0,0.95)] border border-white/10 bg-zinc-900 group"
         >
           {/* Adaptive Background Image & Video Layers */}
           {/* Adaptive Background Image & Video Layers */}
@@ -722,10 +722,10 @@ export const HeroBanner: React.FC<HeroBannerProps> = ({ movie, badgeText }) => {
           </div>
 
           {/* Hero Content Left Block - Minimalist Netflix Layout to showcase trailer */}
-          <div className="absolute bottom-10 left-6 sm:bottom-14 sm:left-10 md:left-14 max-w-xl lg:max-w-2xl z-10 text-white">
+          <div className="absolute bottom-6 left-4 sm:bottom-14 sm:left-10 md:left-14 max-w-xl lg:max-w-2xl z-10 text-white">
             {/* Main Title from API */}
-            <div className="mb-3">
-              <h1 className="text-3xl sm:text-4xl md:text-5xl lg:text-6xl font-black uppercase tracking-tight leading-tight text-white drop-shadow-2xl line-clamp-2">
+            <div className="mb-2 sm:mb-3">
+              <h1 className="text-2xl sm:text-4xl md:text-5xl lg:text-6xl font-black uppercase tracking-tight leading-tight text-white drop-shadow-2xl line-clamp-2">
                 {movie.title}
               </h1>
               {movie.subTitle && (
@@ -736,7 +736,7 @@ export const HeroBanner: React.FC<HeroBannerProps> = ({ movie, badgeText }) => {
             </div>
 
             {/* Clean, concise single-line metadata like real Netflix (Series • Genre • Year • Duration • Quality • Match) */}
-            <div className="flex flex-wrap items-center gap-2 text-xs sm:text-sm font-semibold text-zinc-300 mb-6 drop-shadow">
+            <div className="flex flex-wrap items-center gap-1.5 sm:gap-2 text-[11px] sm:text-sm font-semibold text-zinc-300 mb-4 sm:mb-6 drop-shadow">
               <span>{movie.type === 'series' ? 'Series' : 'Phim điện ảnh'}</span>
               {movie.genres && movie.genres.length > 0 && (
                 <>

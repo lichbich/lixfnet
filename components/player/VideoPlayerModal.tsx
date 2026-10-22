@@ -53,6 +53,9 @@ export const VideoPlayerModal: React.FC = () => {
   const [isVideoLoaded, setIsVideoLoaded] = useState(false);
   const isClosingRef = useRef(false);
 
+  // Mobile Orientation & CSS Rotation states
+  const [isCssRotated, setIsCssRotated] = useState(false);
+
   // Active stream and server references
   const activeEmbed = currentEpisodeEmbed || playingMovie?.embedUrl;
   const currentServer = playingMovie?.episodesServers?.[0];
@@ -84,11 +87,115 @@ export const VideoPlayerModal: React.FC = () => {
   const handleClose = () => {
     if (isClosingRef.current) return;
     isClosingRef.current = true;
+    try {
+      if (document.fullscreenElement) {
+        document.exitFullscreen().catch(() => {});
+      }
+      if (screen.orientation && (screen.orientation as any).unlock) {
+        (screen.orientation as any).unlock();
+      }
+    } catch {}
+    setIsFullscreen(false);
+    setIsCssRotated(false);
     setIsOpen(false);
     setTimeout(() => {
       stopPlaying();
       isClosingRef.current = false;
-    }, 350);
+      try {
+        if (typeof window !== 'undefined' && window.history.state?.lixfnetPlayer) {
+          window.history.back();
+        }
+      } catch {}
+    }, 300);
+  };
+
+  // Android hardware back / browser history integration so back button or swipe gesture exits player
+  useEffect(() => {
+    if (!playingMovie) return;
+    try {
+      window.history.pushState({ lixfnetPlayer: true }, '');
+    } catch {}
+
+    const handlePop = () => {
+      handleClose();
+    };
+
+    window.addEventListener('popstate', handlePop);
+    return () => {
+      window.removeEventListener('popstate', handlePop);
+    };
+  }, [playingMovie?.id]);
+
+  // Auto-request landscape fullscreen on mobile when entering player
+  useEffect(() => {
+    if (!playingMovie) return;
+
+    const isMobile =
+      typeof window !== 'undefined' &&
+      (window.innerWidth <= 768 ||
+        /Android|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent));
+
+    if (isMobile) {
+      const triggerMobileLandscape = async () => {
+        try {
+          if (playerContainerRef.current?.requestFullscreen) {
+            await playerContainerRef.current.requestFullscreen();
+          }
+          if (screen.orientation && (screen.orientation as any).lock) {
+            await (screen.orientation as any).lock('landscape');
+          } else if (window.innerHeight > window.innerWidth) {
+            setIsCssRotated(true);
+          }
+        } catch {
+          // If browser restricts native orientation lock, auto-apply CSS 90deg rotation if portrait
+          if (window.innerHeight > window.innerWidth) {
+            setIsCssRotated(true);
+          }
+        }
+      };
+      triggerMobileLandscape();
+    }
+  }, [playingMovie?.id]);
+
+  // Listen to physical orientation change (if user physically turns phone sideways, turn off CSS rotation)
+  useEffect(() => {
+    const handleOrientation = () => {
+      if (typeof window === 'undefined') return;
+      if (window.innerWidth > window.innerHeight) {
+        setIsCssRotated(false);
+      }
+    };
+
+    window.addEventListener('resize', handleOrientation);
+    window.addEventListener('orientationchange', handleOrientation);
+    return () => {
+      window.removeEventListener('resize', handleOrientation);
+      window.removeEventListener('orientationchange', handleOrientation);
+    };
+  }, []);
+
+  // Toggle landscape / portrait rotation (attempts native orientation lock, falls back to hardware-accelerated CSS 90deg rotation)
+  const toggleRotate = async () => {
+    try {
+      if (!isCssRotated) {
+        if (screen.orientation && (screen.orientation as any).lock) {
+          try {
+            await (screen.orientation as any).lock('landscape');
+            return;
+          } catch {}
+        }
+        setIsCssRotated(true);
+      } else {
+        if (screen.orientation && (screen.orientation as any).unlock) {
+          try {
+            (screen.orientation as any).unlock();
+          } catch {}
+        }
+        setIsCssRotated(false);
+      }
+    } catch {
+      setIsCssRotated(!isCssRotated);
+    }
   };
 
   // Episode / Movie change handler: initialize progress and notify user
@@ -244,8 +351,12 @@ export const VideoPlayerModal: React.FC = () => {
     };
 
     window.addEventListener('mousemove', resetTimer);
+    window.addEventListener('touchstart', resetTimer);
+    window.addEventListener('pointerdown', resetTimer);
     return () => {
       window.removeEventListener('mousemove', resetTimer);
+      window.removeEventListener('touchstart', resetTimer);
+      window.removeEventListener('pointerdown', resetTimer);
       clearTimeout(timer);
     };
   }, [isPlaying]);
@@ -349,10 +460,86 @@ export const VideoPlayerModal: React.FC = () => {
   return (
     <div
       ref={playerContainerRef}
+      style={
+        isCssRotated
+          ? {
+              width: '100dvh',
+              height: '100dvw',
+              transform: 'rotate(90deg) translateY(-100%)',
+              transformOrigin: 'top left',
+              position: 'fixed',
+              top: 0,
+              left: 0,
+              zIndex: 99999,
+            }
+          : undefined
+      }
       className={`fixed inset-0 z-[60] bg-black flex items-center justify-center select-none overflow-hidden transition-all duration-500 ease-out ${
         isOpen ? 'opacity-100 scale-100' : 'opacity-0 scale-[0.98] pointer-events-none'
       }`}
     >
+      {/* Permanent Safe Floating Controls (ALWAYS visible above iframe/video - user can NEVER get trapped) */}
+      <div className="absolute top-3 left-3 sm:top-5 sm:left-6 z-[80] flex items-center gap-2 pointer-events-auto">
+        <button
+          onClick={handleClose}
+          aria-label="Thoát xem phim"
+          className="flex items-center gap-2 px-3.5 py-2 rounded-full bg-black/80 hover:bg-black/95 active:scale-95 text-white backdrop-blur-md border border-white/20 shadow-[0_4px_25px_rgba(0,0,0,0.9)] transition-all cursor-pointer group"
+        >
+          <ArrowLeft className="w-5 h-5 text-white group-hover:-translate-x-0.5 transition-transform" />
+          <span className="text-xs sm:text-sm font-bold pr-0.5 tracking-wide">Thoát</span>
+        </button>
+
+        {/* 1-Tap Screen Orientation Switcher */}
+        <button
+          onClick={toggleRotate}
+          aria-label="Xoay màn hình"
+          className="flex items-center gap-1.5 px-3 py-2 rounded-full bg-black/80 hover:bg-black/95 active:scale-95 text-white backdrop-blur-md border border-white/20 shadow-[0_4px_25px_rgba(0,0,0,0.9)] transition-all cursor-pointer group"
+        >
+          <RotateCw className="w-4 h-4 text-red-500 group-hover:rotate-45 transition-transform" />
+          <span className="text-xs sm:text-sm font-semibold">
+            {isCssRotated ? 'Xoay dọc' : 'Xoay ngang'}
+          </span>
+        </button>
+
+        {/* Quick Episode Selector for Series */}
+        {currentServer && currentServer.items.length > 1 && (
+          <div className="relative">
+            <button
+              onClick={() => setShowEpisodeSelector((prev) => !prev)}
+              aria-label="Danh sách tập"
+              className="flex items-center gap-1.5 px-3 py-2 rounded-full bg-black/80 hover:bg-black/95 active:scale-95 text-white backdrop-blur-md border border-white/20 shadow-[0_4px_25px_rgba(0,0,0,0.9)] transition-all cursor-pointer"
+            >
+              <ListVideo className="w-4 h-4 text-red-500" />
+              <span className="text-xs sm:text-sm font-semibold hidden xs:inline">
+                {currentEpisodeTitle || 'Chọn tập'}
+              </span>
+              <span className="text-xs font-semibold xs:hidden">Tập</span>
+            </button>
+
+            {showEpisodeSelector && (
+              <div className="absolute left-0 top-full mt-2 w-72 max-w-[calc(100vw-2rem)] max-h-80 overflow-y-auto bg-zinc-900/98 backdrop-blur-xl border border-zinc-700 rounded-xl p-2.5 grid grid-cols-4 gap-1.5 shadow-2xl z-50">
+                {currentServer.items.map((ep) => (
+                  <button
+                    key={ep.slug}
+                    onClick={() => {
+                      setPlayingEpisode(ep.embed, `Tập ${ep.name}`);
+                      setShowEpisodeSelector(false);
+                    }}
+                    className={`p-2 text-xs rounded-lg font-bold transition text-center cursor-pointer ${
+                      activeEmbed === ep.embed
+                        ? 'bg-red-600 text-white shadow-md'
+                        : 'bg-zinc-800 hover:bg-zinc-700 text-zinc-300'
+                    }`}
+                  >
+                    Tập {ep.name}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+
       {/* Resume Playback Dialog (Only for local HTML5 video, never blocking iframe) */}
       {showResumeDialog && !activeEmbed && (
         <div className="absolute inset-0 z-50 bg-black/75 backdrop-blur-sm flex items-center justify-center p-4 animate-in fade-in duration-200">
@@ -461,23 +648,23 @@ export const VideoPlayerModal: React.FC = () => {
               showControls ? 'opacity-100' : 'opacity-0 pointer-events-none'
             }`}
           >
-            <div className="flex items-center gap-4">
+            <div className="flex items-center gap-3 pl-44 sm:pl-56">
               <button
                 onClick={handleClose}
                 aria-label="Quay lại"
-                className="w-10 h-10 rounded-full hover:bg-white/20 flex items-center justify-center transition cursor-pointer"
+                className="hidden md:flex w-10 h-10 rounded-full hover:bg-white/20 items-center justify-center transition cursor-pointer"
               >
                 <ArrowLeft className="w-6 h-6" />
               </button>
               <div>
-                <h2 className="text-lg md:text-xl font-bold uppercase tracking-wide">
+                <h2 className="text-sm sm:text-base md:text-xl font-bold uppercase tracking-wide truncate max-w-[180px] sm:max-w-xs md:max-w-md">
                   {playingMovie.title}
                 </h2>
                 <div className="flex items-center gap-2 text-xs text-zinc-300 font-medium">
                   {currentEpisodeTitle && (
                     <span className="text-red-400 font-bold">{currentEpisodeTitle}</span>
                   )}
-                  {playingMovie.subTitle && <span>• {playingMovie.subTitle}</span>}
+                  {playingMovie.subTitle && <span className="hidden sm:inline">• {playingMovie.subTitle}</span>}
                 </div>
               </div>
             </div>
@@ -585,20 +772,20 @@ export const VideoPlayerModal: React.FC = () => {
             }`}
           >
             {/* Top Header */}
-            <div className="flex items-center gap-4 text-white">
+            <div className="flex items-center gap-3 text-white pl-44 sm:pl-56">
               <button
                 onClick={handleClose}
                 aria-label="Quay lại"
-                className="w-10 h-10 rounded-full hover:bg-white/20 flex items-center justify-center transition cursor-pointer"
+                className="hidden md:flex w-10 h-10 rounded-full hover:bg-white/20 items-center justify-center transition cursor-pointer"
               >
                 <ArrowLeft className="w-6 h-6" />
               </button>
               <div>
-                <h2 className="text-lg md:text-xl font-bold uppercase tracking-wide">
+                <h2 className="text-sm sm:text-base md:text-xl font-bold uppercase tracking-wide truncate max-w-[180px] sm:max-w-xs md:max-w-md">
                   {playingMovie.title}
                 </h2>
                 {playingMovie.subTitle && (
-                  <p className="text-xs text-zinc-300 font-medium">{playingMovie.subTitle}</p>
+                  <p className="text-xs text-zinc-300 font-medium hidden sm:block">{playingMovie.subTitle}</p>
                 )}
               </div>
             </div>

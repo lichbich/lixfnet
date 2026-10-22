@@ -340,8 +340,10 @@ export const MovieModal: React.FC = () => {
         if (!isCancelled) {
           setSimilarMovies(results);
         }
-      } catch (err) {
-        console.error('Failed to load similar titles:', err);
+      } catch {
+        if (!isCancelled) {
+          setSimilarMovies([]);
+        }
       } finally {
         if (!isCancelled) {
           setIsLoadingSimilar(false);
