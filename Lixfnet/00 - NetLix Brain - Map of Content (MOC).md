@@ -68,7 +68,7 @@ mindmap
 ### 2. [[02.1 - API NguonC (Danh Sach, Chi Tiet & Tap Phim)|02. Hệ Thống APIs & Tích Hợp Dịch Vụ]]
 - **[[02.1 - API NguonC (Danh Sach, Chi Tiet & Tap Phim)]]**: Nguồn phim chính (phim mới cập nhật, phim bộ, phim lẻ, hoạt hình, tv shows, tìm kiếm và luồng phát stream iframe).
 - **[[02.2 - API TMDB (Title Logo & YouTube Trailer)]]**: Tích hợp TMDB API để lấy trailer YouTube và Title Logo (ClearLogo nghệ thuật dạng SVG/PNG chất lượng cao).
-- **[[02.3 - API Routes Noi Bo Next.js]]**: Tập hợp các endpoints nội bộ (`/api/logo`, `/api/trailer`, `/api/auth/*`, `/api/user/progress`).
+- **[[02.3 - API Routes Noi Bo Next.js]]**: Tập hợp các endpoints nội bộ (`/api/logo`, `/api/trailer`, `/api/netflix-top10`, `/api/auth/*`, `/api/user/progress`, `/api/user/mylist`).
 - **[[02.4 - Firebase Realtime Database & Schema]]**: Cấu trúc dữ liệu `lixfnet/users`, lưu tài khoản và tiến trình xem theo thời gian thực.
 
 ---
@@ -79,7 +79,7 @@ mindmap
 - **[[03.3 - HoverPopoutCard Component]]**: Card hover xem nhanh phong cách Netflix, tính toán vị trí tọa độ động, phát video trailer preview có âm thanh.
 - **[[03.4 - VideoPlayerModal Component]]**: Trình phát video chuyên nghiệp, tự động ẩn thanh điều khiển sau 3.5s, nhận diện chạm màn hình trên mobile, nút xoay màn hình và bộ chọn tập phim.
 - **[[03.5 - MovieModal Component]]**: Modal thông tin chi tiết phim, danh sách mùa / tập, phim tương tự, thông tin diễn viên / đạo diễn.
-- **[[03.6 - MovieRow & Cards Components]]**: Các hàng phim trượt ngang mượt mà, `ContinueWatchingCard`, `Top10Card`, `MovieCard`.
+- **[[03.6 - MovieRow & Cards Components]]**: Các hàng phim trượt ngang mượt mà, `ContinueWatchingCard`, `Top10Card` (Thẻ dọc 2:3 với chữ số 3D nghệ thuật và logo nền tảng), `MovieCard` (Thẻ ngang 16:9 đồng bộ).
 - **[[03.7 - Navbar & Search Components]]**: Thanh điều hướng glassmorphism, tìm kiếm live debounced, menu tài khoản.
 - **[[03.8 - Auth & Account Management Components]]**: Modal tạo và quản lý tài khoản người dùng của quản trị viên.
 
@@ -88,7 +88,7 @@ mindmap
 ### 4. [[04.1 - NetflixContext (State Toan Cuc)|04. Logic & State Management]]
 - **[[04.1 - NetflixContext (State Toan Cuc)]]**: Trái tim state của ứng dụng: quản lý modal, video đang phát, tiến trình xem phim, danh sách cá nhân, âm thanh toàn cục.
 - **[[04.2 - movieApi Service (Logic Xu Ly Du Lieu)]]**: Module chuẩn hóa dữ liệu từ API NguonC, phân tích thời lượng, gắn nhãn, phân loại quốc gia và thể loại.
-- **[[04.3 - logoService (Logic Xu Ly TMDB Logo)]]**: Module tìm kiếm và lựa chọn Title Logo tối ưu theo thứ tự ưu tiên ngôn ngữ (vi > en > neutral > any) kèm in-memory cache.
+- **[[04.3 - logoService (Logic Xu Ly TMDB Logo)]]**: Module tìm kiếm và lựa chọn Title Logo tối ưu theo ngôn ngữ (vi > en > neutral > any) kèm thuật toán **Anti-Black Logo Luminance Analysis** giải nén PNG trên RAM bằng `zlib`.
 - **[[04.4 - recommendationEngine (Thuat Toan De Xuat)]]**: Logic tính toán điểm phù hợp và sắp xếp lại các hàng phim dựa trên lịch sử xem của từng người dùng.
 - **[[04.5 - firebaseAdmin Library (Quan Ly Database)]]**: Thư viện khởi tạo Firebase Admin SDK với cơ chế 3 tầng fallback, làm sạch payload và thao tác CRUD an toàn.
 
@@ -107,6 +107,10 @@ mindmap
   3. *Lỗi Next.js Hydration & SSR Mismatch với LocalStorage*.
   4. *Lỗi Firebase Service Account Key trên môi trường Cloud / Vercel*.
   5. *Lỗi Screen Orientation Lock trên trình duyệt di động*.
+  6. *Lỗi Title Logo TMDB màu đen bị hòa lẫn vào nền tối (giải pháp đo độ sáng PNG Luminance + CSS Rim Glow)*.
+  7. *Lỗi khuyết vị trí #5, #6, #9 trong Top 10 Series Netflix VN do bộ lọc filterNoChina*.
+  8. *Lỗi mismatch dữ liệu phim Top 10 do trùng tên tiếng Anh và hậu tố mùa Tudum*.
+  9. *Lỗi chậm tải trang do quá tải request đa nền tảng và giải pháp tinh gọn tối ưu*.
 
 ---
 
@@ -122,11 +126,14 @@ mindmap
 | **State Toàn Cục** | `context/NetflixContext.tsx` | [[04.1 - NetflixContext (State Toan Cuc)]] |
 | **Trình Phát Video** | `components/player/VideoPlayerModal.tsx` | [[03.4 - VideoPlayerModal Component]] |
 | **Title Logo TMDB** | `services/logoService.ts`, `/api/logo` | [[04.3 - logoService (Logic Xu Ly TMDB Logo)]] |
+| **Bảng Xếp Hạng Top 10** | `app/api/netflix-top10/route.ts`, `components/cards/Top10Card.tsx` | [[02.3 - API Routes Noi Bo Next.js]], [[03.6 - MovieRow & Cards Components]] |
 | **API Phim NguonC** | `services/movieApi.ts` | [[02.1 - API NguonC (Danh Sach, Chi Tiet & Tap Phim)]] |
 | **Bảo Vệ & Phiên** | `middleware.ts`, `lib/firebaseAdmin.ts` | [[01.4 - Xac Thuc Nguoi Dung & Phan Quyen (Auth & Session)]] |
 | **Gợi Ý Phim** | `services/recommendationEngine.ts` | [[01.3 - He Thong De Xuat & Ca Nhan Hoa (Taste Profile)]] |
 | **Card Hover** | `components/cards/HoverPopoutCard.tsx` | [[03.3 - HoverPopoutCard Component]] |
+| **Khắc Phục Sự Cố** | `Lixfnet/06.1...` | [[06.1 - Bang Tong Hop Loi & Cach Khac Phuc]] |
 | **Roadmap Mobile & TV**| `Lixfnet/07.1...` | [[07.1 - Dinh Huong Phat Trien Mobile & Samsung Smart TV (Tizen)]] |
 
 ---
 *Tài liệu được biên soạn tự động và đồng bộ trực tiếp với mã nguồn NetLix.*
+

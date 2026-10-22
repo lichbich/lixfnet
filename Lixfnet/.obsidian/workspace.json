@@ -20,8 +20,19 @@
               "icon": "lucide-file",
               "title": "06.1 - Bang Tong Hop Loi & Cach Khac Phuc"
             }
+          },
+          {
+            "id": "ec17a3f7ee2725e6",
+            "type": "leaf",
+            "state": {
+              "type": "graph",
+              "state": {},
+              "icon": "lucide-git-fork",
+              "title": "Graph view"
+            }
           }
-        ]
+        ],
+        "currentTab": 1
       }
     ],
     "direction": "vertical"
@@ -99,7 +110,6 @@
             "state": {
               "type": "backlink",
               "state": {
-                "file": "06.1 - Bang Tong Hop Loi & Cach Khac Phuc.md",
                 "collapseAll": false,
                 "extraContext": false,
                 "sortOrder": "alphabetical",
@@ -118,7 +128,6 @@
             "state": {
               "type": "outgoing-link",
               "state": {
-                "file": "06.1 - Bang Tong Hop Loi & Cach Khac Phuc.md",
                 "linksCollapsed": false,
                 "unlinkedCollapsed": true
               },
@@ -161,7 +170,6 @@
             "state": {
               "type": "outline",
               "state": {
-                "file": "06.1 - Bang Tong Hop Loi & Cach Khac Phuc.md",
                 "followCursor": false,
                 "showSearch": false,
                 "searchQuery": ""
@@ -188,11 +196,11 @@
       "bases:Create new base": false
     }
   },
-  "active": "e0eafbed3c0386ce",
+  "active": "ec17a3f7ee2725e6",
   "lastOpenFiles": [
+    "06.1 - Bang Tong Hop Loi & Cach Khac Phuc.md",
     "07.1 - Dinh Huong Phat Trien Mobile & Samsung Smart TV (Tizen).md",
     "05.2 - Huong Dan Cau Hinh & Trien Khai (Vercel & Local).md",
-    "06.1 - Bang Tong Hop Loi & Cach Khac Phuc.md",
     "02.1 - API NguonC (Danh Sach, Chi Tiet & Tap Phim).md",
     "movies.md",
     "series.md",
