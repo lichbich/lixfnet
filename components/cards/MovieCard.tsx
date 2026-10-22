@@ -81,14 +81,20 @@ export const MovieCard = React.memo<MovieCardProps>(({
       {/* Top 10 badge */}
       {movie.badges?.isTop10 && (
         <div className="absolute top-2 left-2 z-10">
-          <Top10Badge size="sm" />
+          <Top10Badge size="sm" platform={movie.badges?.platform} />
         </div>
       )}
 
-      {/* Ribbon badge (Tập mới / Mới thêm) if not top 10 */}
-      {!movie.badges?.isTop10 && movie.badges?.ribbon && (
-        <div className="absolute top-2 left-2 z-10">
-          <span className="bg-red-600 text-white font-extrabold text-[9px] uppercase px-1.5 py-0.5 rounded shadow">
+      {/* Ribbon badge (Tập mới / Mới thêm / Chưa có sẵn) */}
+      {movie.badges?.ribbon && (
+        <div className={`absolute top-2 ${movie.badges?.isTop10 ? 'right-2' : 'left-2'} z-10`}>
+          <span
+            className={`${
+              movie.badges.ribbon === 'Chưa có sẵn' || movie.badges.ribbon === 'Sắp chiếu'
+                ? 'bg-amber-600/90 text-white border border-amber-500/30'
+                : 'bg-red-600 text-white'
+            } font-extrabold text-[9px] uppercase px-1.5 py-0.5 rounded shadow`}
+          >
             {movie.badges.ribbon}
           </span>
         </div>

@@ -2,7 +2,7 @@
 
 import React, { useRef } from 'react';
 import { Movie } from '@/types';
-import { StatusBadge } from '@/components/ui/Badge';
+import { StatusBadge, Top10Badge } from '@/components/ui/Badge';
 import { Top10Number } from '@/components/ui/Top10Number';
 import { useNetflix } from '@/context/NetflixContext';
 
@@ -44,6 +44,16 @@ export const Top10Card: React.FC<Top10CardProps> = ({ movie, rank }) => {
         onMouseLeave={handleMouseLeave}
         className="relative z-10 w-[130px] md:w-[155px] h-[190px] md:h-[225px] rounded-md overflow-hidden bg-zinc-800 shadow-xl border border-white/5 group-hover:border-white/30 transition-all flex-shrink-0"
       >
+        {/* Top-left Platform Top 10 Badge */}
+        {movie.badges?.isTop10 && (
+          <div className="absolute top-1.5 left-1.5 z-20">
+            <Top10Badge
+              size="sm"
+              platform={movie.badges.platform || 'netflix'}
+            />
+          </div>
+        )}
+
         <img
           src={movie.posterUrl}
           alt={movie.title}
@@ -60,13 +70,20 @@ export const Top10Card: React.FC<Top10CardProps> = ({ movie, rank }) => {
             {movie.title}
           </p>
 
-          {/* Badges: Tập mới, Xem ngay, etc. */}
+          {/* Badges: Chưa có sẵn, Mới thêm, Tập mới */}
           {movie.badges && (
             <div className="mt-1 flex justify-center">
-              <StatusBadge
-                ribbon={movie.badges.ribbon}
-                subBadge={movie.badges.subBadge}
-              />
+              {movie.badges.ribbon && !movie.badges.ribbon.startsWith('#') ? (
+                <StatusBadge
+                  ribbon={movie.badges.ribbon}
+                  subBadge={movie.badges.subBadge}
+                />
+              ) : movie.badges.ribbon === 'Chưa có sẵn' ? (
+                <StatusBadge
+                  ribbon="Chưa có sẵn"
+                  subBadge="Trailer"
+                />
+              ) : null}
             </div>
           )}
         </div>

@@ -12,9 +12,9 @@ const KNOWN_FRANCHISES: {
   searchKeywords: string[];
 }[] = [
   {
-    match: /bác sĩ\s*x|doctor[\s-]x/i,
-    collectionTitle: 'Bác sĩ X',
-    searchKeywords: ['Bác sĩ X', 'Doctor X'],
+    match: /daimon michiko|bác sĩ x ngoại khoa|doctor[\s-]*x surgeon/i,
+    collectionTitle: 'Bác Sĩ X Ngoại Khoa (Daimon Michiko)',
+    searchKeywords: ['Bác Sĩ X Ngoại Khoa', 'Daimon Michiko'],
   },
   {
     match: /batman|người dơi/i,
@@ -220,6 +220,11 @@ export async function getMovieCollection(movie: Movie): Promise<MovieCollection 
 
       // Filter Chinese movies if present
       if (isChineseMovie(cand, chinaSlugs)) continue;
+
+      // Ensure candidates match country of origin if specified
+      if (movie.countrySlug && cand.countrySlug && movie.countrySlug !== cand.countrySlug) {
+        continue;
+      }
 
       const candTitleNorm = normalizeTitle(cand.title);
       const candSubNorm = normalizeTitle(cand.subTitle || '');

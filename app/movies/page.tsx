@@ -426,8 +426,8 @@ export default function MoviesPage() {
             <>
               <RowSkeleton title="Phim lẻ mới cập nhật" variant="standard" />
               <RowSkeleton title="Phim điện ảnh Hollywood & Âu Mỹ" variant="standard" />
-              <RowSkeleton title="Phim điện ảnh Hàn Quốc" variant="portrait" />
-              <RowSkeleton title="Phim điện ảnh Việt Nam mới nhất" variant="portrait" />
+              <RowSkeleton title="Phim điện ảnh Hàn Quốc" variant="standard" />
+              <RowSkeleton title="Phim điện ảnh Việt Nam mới nhất" variant="standard" />
               <RowSkeleton title="Phim hành động kịch tính" variant="standard" />
             </>
           ) : (
@@ -452,7 +452,7 @@ export default function MoviesPage() {
                 <MovieRow
                   title="Phim điện ảnh Hàn Quốc"
                   movies={koreanMovies}
-                  type="portrait"
+                  type="standard"
                 />
               )}
 
@@ -460,7 +460,7 @@ export default function MoviesPage() {
                 <MovieRow
                   title="Phim điện ảnh Việt Nam mới nhất"
                   movies={vietnameseMovies}
-                  type="portrait"
+                  type="standard"
                 />
               )}
 
@@ -476,7 +476,7 @@ export default function MoviesPage() {
                 <MovieRow
                   title="Kinh dị rùng rợn"
                   movies={horrorMovies}
-                  type="portrait"
+                  type="standard"
                 />
               )}
 

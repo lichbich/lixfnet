@@ -89,17 +89,25 @@ export const MovieModal: React.FC = () => {
       // Only re-initialize logo if switching to a totally new movie
       if (isDifferentMovie) {
         setIsLogoLoaded(false);
-        const cached = clientLogoCache.get(movieKey) || selectedMovie.logoUrl;
-        if (cached) {
-          setLogoUrl(cached);
-        } else {
-          let sessionLogo: string | null = null;
+        if (selectedMovie.logoUrl) {
+          setLogoUrl(selectedMovie.logoUrl);
+          clientLogoCache.set(movieKey, selectedMovie.logoUrl);
           try {
-            sessionLogo = sessionStorage.getItem(`netlix_logo_${movieKey}`);
+            sessionStorage.setItem(`netlix_logo_${movieKey}`, selectedMovie.logoUrl);
           } catch {}
-          setLogoUrl(sessionLogo && sessionLogo !== 'none' ? sessionLogo : null);
+        } else {
+          const cached = clientLogoCache.get(movieKey);
+          if (cached) {
+            setLogoUrl(cached);
+          } else {
+            let sessionLogo: string | null = null;
+            try {
+              sessionLogo = sessionStorage.getItem(`netlix_logo_${movieKey}`);
+            } catch {}
+            setLogoUrl(sessionLogo && sessionLogo !== 'none' ? sessionLogo : null);
+          }
         }
-      } else if (!logoUrl && selectedMovie.logoUrl) {
+      } else if (selectedMovie.logoUrl && logoUrl !== selectedMovie.logoUrl) {
         setLogoUrl(selectedMovie.logoUrl);
       }
 
@@ -576,6 +584,7 @@ export const MovieModal: React.FC = () => {
   })();
 
   const hasApiEpisodes = Boolean(movie.episodesServers && movie.episodesServers.length > 0);
+  const hasStreamUrl = Boolean(hasApiEpisodes || movie.embedUrl || (movie.seasonsList && movie.seasonsList.length > 0));
   const isExpectedSeriesOrEpisodes =
     Boolean(movie.slug) ||
     movie.type === 'series' ||
@@ -585,6 +594,10 @@ export const MovieModal: React.FC = () => {
   const showEpisodesSkeleton = isLoadingDetail && !hasApiEpisodes && isExpectedSeriesOrEpisodes;
 
   const handlePlayOrResume = () => {
+    if (!hasStreamUrl) {
+      setIsTrailerPlaying(true);
+      return;
+    }
     setIsTrailerPlaying(false);
     setIsTrailerReady(false);
     handleClose();
@@ -791,7 +804,7 @@ export const MovieModal: React.FC = () => {
                     className="flex items-center gap-2 bg-white text-black font-bold px-6 py-2.5 rounded-md hover:bg-white/90 active:scale-95 transition shadow-lg text-sm sm:text-base group"
                   >
                     <Play className="w-5 h-5 fill-black" />
-                    <span>{watchProgress ? 'Tiếp tục xem' : 'Phát'}</span>
+                    <span>{!hasStreamUrl ? 'Xem Trailer' : watchProgress ? 'Tiếp tục xem' : 'Phát'}</span>
                   </button>
 
                   <button
@@ -863,6 +876,17 @@ export const MovieModal: React.FC = () => {
                   </span>
                 ))}
               </div>
+
+              {!hasStreamUrl && !isLoadingDetail && (
+                <div className="bg-amber-500/10 border border-amber-500/30 rounded-xl p-3.5 text-amber-200 flex items-start gap-3">
+                  <span className="text-amber-400 font-bold text-[11px] uppercase px-2 py-0.5 bg-amber-500/20 rounded-md border border-amber-500/30 shrink-0 mt-0.5">
+                    Chưa có sẵn
+                  </span>
+                  <p className="text-xs sm:text-sm text-zinc-300 leading-relaxed">
+                    Phim hiện chưa có bản chiếu trực tuyến trên hệ thống. Bạn có thể bấm <strong className="text-white">Xem Trailer</strong> bên trên hoặc bấm dấu <strong className="text-white">(+)</strong> để lưu vào Danh Sách theo dõi!
+                  </p>
+                </div>
+              )}
 
               <p className="text-sm sm:text-base text-zinc-200 leading-relaxed font-normal">
                 {movie.description}
@@ -1300,6 +1324,32 @@ export const MovieModal: React.FC = () => {
                       </div>
                     );
                   })}
+                </div>
+              </div>
+            )}
+
+          {/* NOTICE IF MOVIE HAS NO STREAMING SOURCES */}
+          {!showEpisodesSkeleton &&
+            !hasApiEpisodes &&
+            (!movie.seasonsList || movie.seasonsList.length === 0) &&
+            !movie.embedUrl && (
+              <div className="mt-8 border-t border-zinc-800/80 pt-6">
+                <div className="flex items-center gap-2.5 mb-3">
+                  <Tv className="w-5 h-5 text-amber-500" />
+                  <h3 className="text-lg font-bold text-white tracking-tight">Tình trạng phát hành</h3>
+                </div>
+                <div className="bg-zinc-900/90 border border-zinc-700/60 rounded-xl p-4 sm:p-5 flex flex-col sm:flex-row items-center gap-4">
+                  <div className="w-12 h-12 rounded-full bg-amber-500/10 border border-amber-500/30 flex items-center justify-center shrink-0 text-amber-400">
+                    <Tv className="w-6 h-6" />
+                  </div>
+                  <div className="space-y-1 text-center sm:text-left">
+                    <p className="text-white font-bold text-sm sm:text-base">
+                      Tựa phim này hiện chưa có bản chiếu trực tuyến (Chưa có nguồn)
+                    </p>
+                    <p className="text-xs sm:text-sm text-zinc-400 leading-relaxed">
+                      Hệ thống sẽ tự động cập nhật ngay khi phim có bản phát sóng chính thức. Bạn có thể thưởng thức Trailer chính thức hoặc bấm nút dấu <strong className="text-white">(+)</strong> để lưu vào Danh Sách theo dõi!
+                    </p>
+                  </div>
                 </div>
               </div>
             )}

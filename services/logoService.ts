@@ -201,6 +201,8 @@ function scoreCandidate(
       score += 40;
     } else if (Math.abs(itemYear - targetYear) <= 1) {
       score += 20;
+    } else if (Math.abs(itemYear - targetYear) >= 3) {
+      score -= 80; // Heavily penalize different movie releases with the same title
     }
   }
 
@@ -284,11 +286,11 @@ export async function fetchTMDBLogo(params: FetchLogoParams): Promise<string | n
   const parsedTmdbId = tmdbId && !isNaN(Number(tmdbId)) && Number(tmdbId) > 0 ? Number(tmdbId) : undefined;
   const mediaTypeVal = mediaType === 'tv' ? 'tv' : 'movie';
 
-  // Construct cache key
-  const cacheKey = slug
-    ? `logo_slug_${slug}`
-    : parsedTmdbId
+  // Construct cache key - TMDB ID is globally unique and authoritative
+  const cacheKey = parsedTmdbId
     ? `logo_id_${parsedTmdbId}_${mediaTypeVal}`
+    : slug
+    ? `logo_slug_${slug}`
     : `logo_q_${title || ''}_${subTitle || ''}_${year || ''}`;
 
   const cached = logoCache.get(cacheKey);
@@ -342,9 +344,15 @@ export async function fetchTMDBLogo(params: FetchLogoParams): Promise<string | n
     }
   }
 
-  // Update in-memory cache
+  // Update in-memory caches
   logoCache.set(cacheKey, { url: resolvedLogo, timestamp: now });
-  if (slug && parsedTmdbId) {
+  if (slug) {
+    logoCache.set(`logo_slug_${slug}`, { url: resolvedLogo, timestamp: now });
+    if (resolvedLogo) {
+      clientLogoCache.set(slug, resolvedLogo);
+    }
+  }
+  if (parsedTmdbId) {
     logoCache.set(`logo_id_${parsedTmdbId}_${mediaTypeVal}`, { url: resolvedLogo, timestamp: now });
   }
 

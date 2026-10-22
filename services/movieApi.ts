@@ -185,7 +185,16 @@ export function getGenreSlug(genreName?: string): string | undefined {
 /**
  * Maps an item from phim.nguonc.com API to the application's Movie interface
  */
-export function mapNguonCToMovie(item: NguonCItem | NguonCDetailMovie, rank?: number): Movie {
+export function mapNguonCToMovie(
+  item: NguonCItem | NguonCDetailMovie,
+  rank?: number,
+  options?: {
+    isTop10?: boolean;
+    isNewAdded?: boolean;
+    platform?: 'netflix' | 'apple' | 'disney' | 'hbo' | 'prime';
+    platformName?: string;
+  }
+): Movie {
   const isDetail = 'category' in item;
   let genres: string[] = [];
   let country: string | undefined;
@@ -278,11 +287,36 @@ export function mapNguonCToMovie(item: NguonCItem | NguonCDetailMovie, rank?: nu
   }
 
   // Create badge
-  const hasNewEp = item.current_episode && item.current_episode !== 'FULL';
+  const hasNewEp = Boolean(
+    item.current_episode &&
+    item.current_episode !== 'FULL' &&
+    !item.current_episode.toLowerCase().includes('hoàn tất')
+  );
+
+  let isRecent = options?.isNewAdded || false;
+  if (!isRecent && item.modified) {
+    const modTime = new Date(item.modified).getTime();
+    if (!isNaN(modTime) && Date.now() - modTime < 10 * 24 * 60 * 60 * 1000) {
+      isRecent = true;
+    }
+  }
+
+  let ribbon: string | undefined = undefined;
+  let subBadge: string | undefined = undefined;
+  if (hasNewEp) {
+    ribbon = 'Tập mới';
+    subBadge = item.current_episode;
+  } else if (isRecent) {
+    ribbon = 'Mới thêm';
+    subBadge = 'Xem ngay';
+  }
+
   const badges = {
-    ribbon: hasNewEp ? 'Tập mới' : 'Mới thêm',
-    subBadge: hasNewEp ? item.current_episode : 'Xem ngay',
-    isTop10: rank !== undefined ? rank <= 10 : false,
+    ribbon,
+    subBadge,
+    isTop10: options?.isTop10 || false,
+    platform: options?.platform,
+    platformName: options?.platformName,
   };
 
   let parsedYear = typeof item.year === 'number' ? item.year : parseInt(String(item.year || ''), 10);
@@ -337,7 +371,9 @@ export async function getNewUpdatedMovies(page = 1): Promise<Movie[]> {
     });
     if (!res.ok) throw new Error(`HTTP error! status: ${res.status}`);
     const data: NguonCListResponse = await res.json();
-    return (data.items || []).map((item, idx) => mapNguonCToMovie(item, idx + 1));
+    return (data.items || []).map((item, idx) =>
+      mapNguonCToMovie(item, undefined, { isNewAdded: page === 1 && idx < 6 })
+    );
   } catch (error) {
     console.error('Error fetching new updated movies:', error);
     return [];
@@ -354,7 +390,7 @@ export async function getMoviesByCategory(slug: string, page = 1): Promise<Movie
     });
     if (!res.ok) return [];
     const data: NguonCListResponse = await res.json();
-    return (data.items || []).map((item, idx) => mapNguonCToMovie(item, idx + 1));
+    return (data.items || []).map((item) => mapNguonCToMovie(item));
   } catch {
     return [];
   }
@@ -370,7 +406,7 @@ export async function getMoviesByGenre(slug: string, page = 1): Promise<Movie[]>
     });
     if (!res.ok) return [];
     const data: NguonCListResponse = await res.json();
-    return (data.items || []).map((item, idx) => mapNguonCToMovie(item, idx + 1));
+    return (data.items || []).map((item) => mapNguonCToMovie(item));
   } catch {
     return [];
   }
@@ -487,7 +523,7 @@ export async function getMoviesByCountry(slug: string, page = 1): Promise<Movie[
       return [];
     }
     const data: NguonCListResponse = await res.json();
-    return (data.items || []).map((item, idx) => mapNguonCToMovie(item, idx + 1));
+    return (data.items || []).map((item) => mapNguonCToMovie(item));
   } catch {
     return [];
   }

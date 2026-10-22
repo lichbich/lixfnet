@@ -57,7 +57,7 @@ export const ContinueWatchingCard: React.FC<ContinueWatchingCardProps> = ({
       {/* TOP 10 Badge in top-left */}
       {movie.badges?.isTop10 && (
         <div className="absolute top-2 left-2 z-10">
-          <Top10Badge size="sm" />
+          <Top10Badge size="sm" platform={movie.badges?.platform} />
         </div>
       )}
 

@@ -49,10 +49,13 @@ export interface Movie {
   posterUrl: string;
   logoUrl?: string;
   rank?: number; // for Top 10
+  isAvailable?: boolean;
   badges?: {
     ribbon?: string; // e.g. "Tập mới", "Mùa mới", "Mới thêm", "Tập tiếp theo"
     subBadge?: string; // e.g. "Xem ngay", "Thứ Bảy", "Thứ Sáu"
     isTop10?: boolean;
+    platform?: 'netflix' | 'apple' | 'disney' | 'hbo' | 'prime';
+    platformName?: string;
     customPill?: {
       text: string;
       iconType?: 'calendar' | 'emmy';

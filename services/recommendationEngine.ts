@@ -15,7 +15,7 @@ export interface CandidateRow {
   title: string;
   countrySlug?: string;
   genreSlug?: string;
-  type: 'standard' | 'portrait' | 'continue';
+  type: 'standard' | 'portrait' | 'continue' | 'top10';
   movies: Movie[];
   priorityBoost?: number;
 }

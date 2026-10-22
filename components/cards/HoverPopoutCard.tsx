@@ -577,7 +577,7 @@ export const HoverPopoutCard: React.FC = () => {
             </span>
           )}
           {activeMovie.badges?.isTop10 ? (
-            <Top10Badge size="sm" />
+            <Top10Badge size="sm" platform={activeMovie.badges?.platform} />
           ) : (
             <div className="bg-black/40 backdrop-blur p-1 rounded-sm">
               <NetflixRibbonN className="w-4 h-6 drop-shadow" />

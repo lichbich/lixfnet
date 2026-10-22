@@ -421,9 +421,9 @@ export default function SeriesPage() {
             <>
               <RowSkeleton title="TV Shows mới nhất" variant="standard" />
               <RowSkeleton title="Phim bộ truyền hình đặc sắc" variant="standard" />
-              <RowSkeleton title="Series Hàn Quốc nổi bật" variant="portrait" />
+              <RowSkeleton title="Series Hàn Quốc nổi bật" variant="standard" />
               <RowSkeleton title="Series truyền hình Mỹ" variant="standard" />
-              <RowSkeleton title="Anime & Phim hoạt hình dài tập" variant="portrait" />
+              <RowSkeleton title="Anime & Phim hoạt hình dài tập" variant="standard" />
             </>
           ) : (
             <>
@@ -447,7 +447,7 @@ export default function SeriesPage() {
                 <MovieRow
                   title="Series Hàn Quốc nổi bật"
                   movies={koreanSeries}
-                  type="portrait"
+                  type="standard"
                 />
               )}
 
@@ -463,7 +463,7 @@ export default function SeriesPage() {
                 <MovieRow
                   title="Anime & Phim hoạt hình dài tập"
                   movies={animeSeries}
-                  type="portrait"
+                  type="standard"
                 />
               )}
             </>

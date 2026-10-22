@@ -3,6 +3,7 @@
 import React, { createContext, useContext, useState, useEffect, useCallback, useRef } from 'react';
 import { Movie, EpisodeServer, WatchProgress, EpisodeProgress } from '@/types';
 import { getMovieDetail } from '@/services/movieApi';
+import { findNguonCMatch } from '@/services/trendingService';
 
 interface HoverRect {
   top: number;
@@ -225,25 +226,67 @@ export const NetflixProvider: React.FC<{ children: React.ReactNode }> = ({ child
   const openModal = useCallback(async (movie: Movie) => {
     setSelectedMovie(movie);
 
-    // If the movie has a slug, fetch full API detail to get real episodes and streaming servers
-    if (movie.slug) {
+    let targetSlug = movie.slug;
+
+    // If the movie has no slug and no episodes, try on-demand lookup against NguonC with strict cross-validation
+    if (!targetSlug && (!movie.episodesServers || movie.episodesServers.length === 0)) {
       try {
         setIsLoadingDetail(true);
-        const detailed = await getMovieDetail(movie.slug);
+        const match = await findNguonCMatch(movie.title, movie.subTitle, {
+          year: movie.year,
+          type: movie.type,
+        });
+        if (match?.slug) {
+          targetSlug = match.slug;
+        }
+      } catch (err) {
+        console.warn('Fallback NguonC lookup error:', err);
+      }
+    }
+
+    // If a slug is resolved, fetch full API detail to get real episodes and streaming servers
+    if (targetSlug) {
+      try {
+        setIsLoadingDetail(true);
+        const detailed = await getMovieDetail(targetSlug);
         if (detailed) {
           setSelectedMovie((prev) => {
-            if (!prev) return prev;
-            if (prev.slug === movie.slug) {
-              return {
-                ...prev,
-                ...detailed,
-                logoUrl: prev.logoUrl || detailed.logoUrl,
-                // keep previous custom badges or progress if any
-                badges: prev.badges || detailed.badges,
-                progress: prev.progress,
-              };
-            }
-            return prev;
+            if (!prev) return detailed;
+
+            const hasEpisodes = Boolean(detailed.episodesServers && detailed.episodesServers.length > 0);
+
+            return {
+              ...detailed,
+              ...prev, // Prev preserves high-fidelity title, posters, synopsis, logoUrl, year, rating
+              slug: targetSlug || prev.slug,
+              embedUrl: detailed.embedUrl || prev.embedUrl,
+              episodesServers: hasEpisodes ? detailed.episodesServers : prev.episodesServers,
+              currentEpisode: detailed.currentEpisode || prev.currentEpisode,
+              seasons: detailed.seasons || prev.seasons,
+              duration: detailed.duration || prev.duration,
+              durationMinutes: detailed.durationMinutes || prev.durationMinutes,
+              isAvailable: hasEpisodes ? true : (prev.isAvailable ?? detailed.isAvailable),
+              genres:
+                detailed.genres && detailed.genres.length > 0 && detailed.genres[0] !== 'Phim hot'
+                  ? detailed.genres
+                  : prev.genres || detailed.genres,
+              logoUrl: prev.logoUrl || detailed.logoUrl,
+              badges: {
+                ...detailed.badges,
+                ...prev.badges,
+                platform: prev.badges?.platform || detailed.badges?.platform,
+                platformName: prev.badges?.platformName || detailed.badges?.platformName,
+                isTop10: prev.badges?.isTop10 ?? detailed.badges?.isTop10,
+                // Clear "Chưa có sẵn" ribbon if we actually have playable episodes
+                ribbon: (hasEpisodes && prev.badges?.ribbon === 'Chưa có sẵn')
+                  ? undefined
+                  : (prev.badges?.ribbon || detailed.badges?.ribbon),
+                subBadge: (hasEpisodes && (prev.badges?.subBadge === 'Trailer' || prev.badges?.subBadge === 'Sắp chiếu'))
+                  ? (prev.badges?.platformName || 'Phát hành')
+                  : (prev.badges?.subBadge || detailed.badges?.subBadge),
+              },
+              progress: prev.progress,
+            };
           });
         }
       } catch (err) {
@@ -251,6 +294,8 @@ export const NetflixProvider: React.FC<{ children: React.ReactNode }> = ({ child
       } finally {
         setIsLoadingDetail(false);
       }
+    } else {
+      setIsLoadingDetail(false);
     }
   }, []);
 
@@ -273,17 +318,37 @@ export const NetflixProvider: React.FC<{ children: React.ReactNode }> = ({ child
       setCurrentEpisodeEmbed(targetEmbed);
       setCurrentEpisodeTitle(targetTitle);
 
+      // Resolve slug dynamically if missing
+      let activeSlug = movie.slug;
+      if (!targetEmbed && !activeSlug) {
+        try {
+          const match = await findNguonCMatch(movie.title, movie.subTitle, {
+            year: movie.year,
+            type: movie.type,
+          });
+          if (match?.slug) {
+            activeSlug = match.slug;
+          }
+        } catch {}
+      }
+
       // 2. If movie has not been watched yet (or missing embed) and has slug:
       // Fetch full detail to start from Episode 1 (Tập 1)
-      if (!targetEmbed && movie.slug) {
+      if (!targetEmbed && activeSlug) {
         try {
           setIsLoadingDetail(true);
-          const detailed = await getMovieDetail(movie.slug);
+          const detailed = await getMovieDetail(activeSlug);
           if (detailed) {
             setPlayingMovie((prev) => {
               if (!prev) return detailed;
-              if (prev.slug === movie.slug || prev.id === movie.id) {
-                return { ...prev, ...detailed };
+              if (prev.slug === activeSlug || prev.id === movie.id) {
+                return {
+                  ...detailed,
+                  ...prev,
+                  slug: activeSlug || prev.slug,
+                  episodesServers: detailed.episodesServers || prev.episodesServers,
+                  embedUrl: detailed.embedUrl || prev.embedUrl,
+                };
               }
               return prev;
             });
