@@ -30,6 +30,7 @@ export interface EpisodeServer {
 
 export interface Movie {
   id: string;
+  _id?: string; // MongoDB ObjectId from PhimAPI
   slug?: string; // API slug for fetching detail and episodes
   title: string;
   subTitle?: string;

@@ -15,6 +15,7 @@ export const ProxySettingsModal: React.FC = () => {
   } = useNetflix();
 
   const [inputUrl, setInputUrl] = useState('');
+  const [isEnabled, setIsEnabled] = useState(false);
   const [isTesting, setIsTesting] = useState(false);
   const [testResult, setTestResult] = useState<{
     success: boolean;
@@ -26,10 +27,11 @@ export const ProxySettingsModal: React.FC = () => {
   useEffect(() => {
     if (isProxySettingsOpen) {
       setInputUrl(streamProxyUrl || '');
+      setIsEnabled(Boolean(isStreamProxyEnabled));
       setTestResult(null);
       setSaveSuccess(false);
     }
-  }, [isProxySettingsOpen, streamProxyUrl]);
+  }, [isProxySettingsOpen, streamProxyUrl, isStreamProxyEnabled]);
 
   if (!isProxySettingsOpen) return null;
 
@@ -94,8 +96,12 @@ export const ProxySettingsModal: React.FC = () => {
   const handleSave = () => {
     const clean = inputUrl.trim();
     setStreamProxyUrl(clean);
-    if (clean) {
-      setIsStreamProxyEnabled(true);
+    // If URL is empty, proxy cannot be enabled; otherwise respect the user's toggle choice
+    if (!clean) {
+      setIsStreamProxyEnabled(false);
+      setIsEnabled(false);
+    } else {
+      setIsStreamProxyEnabled(isEnabled);
     }
     setSaveSuccess(true);
     setTimeout(() => {
@@ -104,11 +110,7 @@ export const ProxySettingsModal: React.FC = () => {
   };
 
   const handleToggle = () => {
-    const nextState = !isStreamProxyEnabled;
-    setIsStreamProxyEnabled(nextState);
-    if (nextState && !streamProxyUrl && inputUrl.trim()) {
-      setStreamProxyUrl(inputUrl.trim());
-    }
+    setIsEnabled((prev) => !prev);
   };
 
   return (
@@ -145,7 +147,7 @@ export const ProxySettingsModal: React.FC = () => {
           {/* Status & Toggle */}
           <div
             className={`p-3 rounded-xl border flex items-center justify-between transition-all ${
-              isStreamProxyEnabled && streamProxyUrl
+              isEnabled && inputUrl.trim()
                 ? 'bg-emerald-950/30 border-emerald-500/40'
                 : 'bg-zinc-900/60 border-zinc-800'
             }`}
@@ -153,26 +155,26 @@ export const ProxySettingsModal: React.FC = () => {
             <div className="flex items-center gap-2.5">
               <span
                 className={`w-2.5 h-2.5 rounded-full ${
-                  isStreamProxyEnabled && streamProxyUrl
+                  isEnabled && inputUrl.trim()
                     ? 'bg-emerald-400 shadow-[0_0_10px_rgba(52,211,153,0.9)] animate-pulse'
                     : 'bg-zinc-600'
                 }`}
               />
               <span className="font-semibold text-xs text-zinc-200">
-                {isStreamProxyEnabled && streamProxyUrl ? 'Proxy đang BẬT' : 'Proxy đang TẮT'}
+                {isEnabled && inputUrl.trim() ? 'Proxy đang BẬT' : 'Proxy đang TẮT'}
               </span>
             </div>
 
             <button
               onClick={handleToggle}
               className={`px-3 py-1.5 rounded-lg font-bold text-xs flex items-center gap-1.5 transition active:scale-95 cursor-pointer ${
-                isStreamProxyEnabled
+                isEnabled
                   ? 'bg-red-600 hover:bg-red-700 text-white'
                   : 'bg-emerald-600 hover:bg-emerald-700 text-white'
               }`}
             >
               <Power className="w-3.5 h-3.5" />
-              <span>{isStreamProxyEnabled ? 'Tắt' : 'Bật'}</span>
+              <span>{isEnabled ? 'Tắt' : 'Bật'}</span>
             </button>
           </div>
 

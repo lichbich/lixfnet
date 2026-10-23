@@ -1,9 +1,18 @@
 'use client';
 
-import React, { createContext, useContext, useState, useEffect, useCallback, useRef } from 'react';
+import React, { createContext, useContext, useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { Movie, EpisodeServer, WatchProgress, EpisodeProgress } from '@/types';
 import { getMovieDetail, getMovieDetailByTmdb, formatEpisodeTitle } from '@/services/movieApi';
 import { findNguonCMatch } from '@/services/trendingService';
+import {
+  getCanonicalMovieId,
+  isSameMovie,
+  deduplicateMovies,
+  deduplicateWatchProgressMap,
+  mergeMovieData,
+} from '@/lib/movieUtils';
+import { crossMatchAndEnrichMovie } from '@/services/movieCrossMatchService';
+import { clientLogoCache } from '@/services/logoService';
 
 interface HoverRect {
   top: number;
@@ -56,8 +65,8 @@ interface NetflixContextType {
     episodeEmbed?: string,
     episodeM3u8?: string
   ) => void;
-  getWatchProgress: (slugOrId: string) => WatchProgress | undefined;
-  getEpisodeProgress: (slugOrId: string, episodeNameOrNumber: string) => EpisodeProgress | undefined;
+  getWatchProgress: (slugOrId: string, movieObj?: Movie) => WatchProgress | undefined;
+  getEpisodeProgress: (slugOrId: string, episodeNameOrNumber: string, movieObj?: Movie) => EpisodeProgress | undefined;
   clearWatchProgress: (slugOrId: string) => void;
   // Hover Popout Card Coordination
   hoveredMovie: Movie | null;
@@ -83,7 +92,7 @@ interface NetflixContextType {
   stopPlaying: () => void;
   setPlayingEpisode: (embedUrl: string, title?: string, m3u8Url?: string) => void;
   toggleMyList: (movie: Movie) => void;
-  isInMyList: (id: string) => boolean;
+  isInMyList: (id: string, movieObj?: Movie) => boolean;
   toggleMute: () => void;
   setSearchQuery: (q: string) => void;
 }
@@ -236,565 +245,69 @@ export const NetflixProvider: React.FC<{ children: React.ReactNode }> = ({ child
   // Watch Progress State
   const [watchProgressMap, setWatchProgressMap] = useState<Record<string, WatchProgress>>({});
 
-  // Hover Popout State
-  const [hoveredMovie, setHoveredMovie] = useState<Movie | null>(null);
-  const [hoverRect, setHoverRect] = useState<HoverRect | null>(null);
-  const [isCardTrailerPlaying, setIsCardTrailerPlaying] = useState<boolean>(false);
-
-  // Initialize & sync user-scoped My List from localStorage and Firebase cloud
-  useEffect(() => {
-    if (!currentUser?.username) {
-      setMyList([]);
-      return;
-    }
-
-    const username = currentUser.username;
-    const userStorageKey = `netflix_my_list_${username}`;
-
-    // 1. Immediately hydrate from cached local storage for this user
-    try {
-      const cached = localStorage.getItem(userStorageKey);
-      if (cached) {
-        setMyList(JSON.parse(cached));
-      } else {
-        // Migration fallback: check legacy un-scoped key
-        const legacy = localStorage.getItem('netflix_my_list');
-        if (legacy) {
-          const parsed = JSON.parse(legacy);
-          setMyList(parsed);
-          localStorage.setItem(userStorageKey, legacy);
-        } else {
-          setMyList([]);
-        }
-      }
-    } catch {
-      setMyList([]);
-    }
-
-    // 2. Fetch cloud-synced My List from Firebase via /api/user/mylist
-    fetch('/api/user/mylist')
-      .then((res) => {
-        if (!res.ok) throw new Error('Not logged in');
-        return res.json();
-      })
-      .then((data) => {
-        if (data.myList && Array.isArray(data.myList)) {
-          setMyList((prev) => {
-            const map = new Map<string, Movie>();
-            // Add cloud items
-            data.myList.forEach((m: Movie) => {
-              const k = m.slug || m.id;
-              if (k) map.set(k, m);
-            });
-            // Also preserve any local items not yet in cloud and sync them
-            prev.forEach((m) => {
-              const k = m.slug || m.id;
-              if (k && !map.has(k)) {
-                map.set(k, m);
-                fetch('/api/user/mylist', {
-                  method: 'POST',
-                  headers: { 'Content-Type': 'application/json' },
-                  body: JSON.stringify({ key: k, movie: m }),
-                }).catch(() => {});
-              }
-            });
-            const merged = Array.from(map.values());
-            try {
-              localStorage.setItem(userStorageKey, JSON.stringify(merged));
-            } catch {}
-            return merged;
-          });
-        }
-      })
-      .catch(() => {});
-  }, [currentUser?.username]);
-
-  const openModal = useCallback(async (movie: Movie) => {
-    setSelectedMovie(movie);
-
-    let targetSlug = movie.slug;
-    let detailed: Movie | null = null;
-
-    const resolvedTmdbId = movie.tmdb?.id || movie.tmdbId;
-
-    try {
-      setIsLoadingDetail(true);
-
-      // Stage 1: Try TMDB ID lookup if available (100% precision)
-      if (resolvedTmdbId) {
-        try {
-          detailed = await getMovieDetailByTmdb(
-            resolvedTmdbId,
-            movie.type === 'series' ? 'tv' : 'movie'
-          );
-          if (detailed?.slug) {
-            targetSlug = detailed.slug;
-          }
-        } catch {}
-      }
-
-      // Stage 2: Direct lookup by targetSlug if not resolved by TMDB
-      if (!detailed && targetSlug) {
-        try {
-          detailed = await getMovieDetail(targetSlug);
-        } catch {}
-      }
-
-      // Stage 3: Dynamic title search if no stream/episodes were found
-      if (!detailed && (!movie.episodesServers || movie.episodesServers.length === 0)) {
-        try {
-          const match = await findNguonCMatch(movie.title, movie.subTitle, {
-            year: movie.year,
-            type: movie.type,
-            tmdbId: resolvedTmdbId,
-          });
-          if (match?.slug && match.slug !== targetSlug) {
-            targetSlug = match.slug;
-            detailed = await getMovieDetail(targetSlug);
-          }
-        } catch (err) {
-          console.warn('Fallback movie lookup error:', err);
-        }
-      }
-
-      // If detailed movie data was retrieved, merge with high-fidelity UI properties
-      if (detailed) {
-        const foundDetail = detailed;
-        setSelectedMovie((prev) => {
-          if (!prev) return foundDetail;
-
-          const hasEpisodes = Boolean(foundDetail.episodesServers && foundDetail.episodesServers.length > 0);
-
-          return {
-            ...foundDetail,
-            ...prev, // Prev preserves high-fidelity title, posters, synopsis, logoUrl, year, rating
-            slug: targetSlug || foundDetail.slug || prev.slug,
-            embedUrl: foundDetail.embedUrl || prev.embedUrl,
-            m3u8Url: foundDetail.m3u8Url || prev.m3u8Url,
-            episodesServers: hasEpisodes ? foundDetail.episodesServers : prev.episodesServers,
-            currentEpisode: foundDetail.currentEpisode || prev.currentEpisode,
-            seasons: foundDetail.seasons || prev.seasons,
-            duration: foundDetail.duration || prev.duration,
-            durationMinutes: foundDetail.durationMinutes || prev.durationMinutes,
-            isAvailable: hasEpisodes ? true : (prev.isAvailable ?? foundDetail.isAvailable),
-            genres:
-              foundDetail.genres && foundDetail.genres.length > 0 && foundDetail.genres[0] !== 'Phim hot'
-                ? foundDetail.genres
-                : prev.genres || foundDetail.genres,
-            logoUrl: prev.logoUrl || foundDetail.logoUrl,
-            badges: {
-              ...foundDetail.badges,
-              ...prev.badges,
-              platform: prev.badges?.platform || foundDetail.badges?.platform,
-              platformName: prev.badges?.platformName || foundDetail.badges?.platformName,
-              isTop10: prev.badges?.isTop10 ?? foundDetail.badges?.isTop10,
-              // Clear "Chưa có sẵn" ribbon if we actually have playable episodes
-              ribbon: (hasEpisodes && prev.badges?.ribbon === 'Chưa có sẵn')
-                ? undefined
-                : (prev.badges?.ribbon || foundDetail.badges?.ribbon),
-              subBadge: (hasEpisodes && (prev.badges?.subBadge === 'Trailer' || prev.badges?.subBadge === 'Sắp chiếu'))
-                ? (prev.badges?.platformName || 'Phát hành')
-                : (prev.badges?.subBadge || foundDetail.badges?.subBadge),
-            },
-            progress: prev.progress,
-          };
-        });
-      }
-    } catch (err) {
-      console.warn('Modal movie detail resolution error:', err);
-    } finally {
-      setIsLoadingDetail(false);
-    }
-  }, []);
-
-  const closeModal = useCallback(() => {
-    setSelectedMovie(null);
-  }, []);
-
-  const startPlaying = useCallback(
-    async (
-      movie: Movie,
-      episodeEmbedUrl?: string,
-      episodeTitle?: string,
-      episodeM3u8Url?: string
-    ) => {
-      if (!movie) return;
-
-      const key = movie.slug || movie.id;
-      const wp = watchProgressMapRef.current[key];
-
-      // 1. If an episode was explicitly passed OR previously watched, resume that episode
-      let targetEmbed = episodeEmbedUrl || wp?.episodeEmbed || movie.embedUrl || null;
-      let targetTitle = episodeTitle || wp?.episodeTitle || movie.currentEpisode || null;
-      let targetM3u8 = episodeM3u8Url || wp?.episodeM3u8 || movie.m3u8Url || null;
-
-      if (targetTitle) {
-        targetTitle = formatEpisodeTitle(targetTitle);
-      }
-
-      // If targetM3u8 is not directly provided, search within movie.episodesServers or movie.seasonsList
-      if (!targetM3u8 && movie.episodesServers) {
-        for (const srv of movie.episodesServers) {
-          const found = srv.items?.find(
-            (ep) =>
-              ep.embed === targetEmbed ||
-              formatEpisodeTitle(ep.name) === targetTitle ||
-              ep.name === targetTitle
-          );
-          if (found?.m3u8) {
-            targetM3u8 = found.m3u8;
-            break;
-          }
-        }
-      }
-      if (!targetM3u8 && movie.seasonsList) {
-        for (const s of movie.seasonsList) {
-          const found = s.episodes?.find(
-            (ep) =>
-              ep.embedUrl === targetEmbed ||
-              formatEpisodeTitle(ep.title) === targetTitle ||
-              ep.title === targetTitle
-          );
-          if (found?.m3u8Url) {
-            targetM3u8 = found.m3u8Url;
-            break;
-          }
-        }
-      }
-
-      setPlayingMovie(movie);
-      setCurrentEpisodeEmbed(targetEmbed);
-      setCurrentEpisodeTitle(targetTitle);
-      setCurrentEpisodeM3u8(targetM3u8);
-
-      // Resolve slug dynamically if missing
-      let activeSlug = movie.slug;
-      if (!targetEmbed && !activeSlug) {
-        try {
-          const match = await findNguonCMatch(movie.title, movie.subTitle, {
-            year: movie.year,
-            type: movie.type,
-          });
-          if (match?.slug) {
-            activeSlug = match.slug;
-          }
-        } catch {}
-      }
-
-      // 2. If movie has not been watched yet or missing m3u8/embed, and has slug:
-      // Fetch full detail to resolve accurate stream URLs
-      if ((!targetEmbed || !targetM3u8) && activeSlug) {
-        try {
-          setIsLoadingDetail(true);
-          const detailed = await getMovieDetail(activeSlug);
-          if (detailed) {
-            setPlayingMovie((prev) => {
-              if (!prev) return detailed;
-              if (prev.slug === activeSlug || prev.id === movie.id) {
-                return {
-                  ...detailed,
-                  ...prev,
-                  slug: activeSlug || prev.slug,
-                  episodesServers: detailed.episodesServers || prev.episodesServers,
-                  embedUrl: detailed.embedUrl || prev.embedUrl,
-                  m3u8Url: detailed.m3u8Url || prev.m3u8Url,
-                };
-              }
-              return prev;
-            });
-
-            // Find matching episode in detailed
-            let resolvedEp: any = null;
-            if (detailed.episodesServers) {
-              for (const srv of detailed.episodesServers) {
-                const found = srv.items?.find(
-                  (ep) =>
-                    (targetEmbed && ep.embed === targetEmbed) ||
-                    (targetTitle && formatEpisodeTitle(ep.name) === targetTitle) ||
-                    (targetTitle && ep.name === targetTitle)
-                );
-                if (found) {
-                  resolvedEp = found;
-                  break;
-                }
-              }
-            }
-
-            const firstServer = detailed.episodesServers?.[0];
-            const firstEp = resolvedEp || firstServer?.items?.[0];
-            const resolvedEmbed = targetEmbed || firstEp?.embed || detailed.embedUrl || null;
-            const resolvedM3u8 = targetM3u8 || firstEp?.m3u8 || detailed.m3u8Url || null;
-            const resolvedTitle = targetTitle || (firstEp
-              ? formatEpisodeTitle(firstEp.name)
-              : (detailed.currentEpisode ? formatEpisodeTitle(detailed.currentEpisode) : 'Tập 1'));
-
-            setCurrentEpisodeEmbed(resolvedEmbed);
-            setCurrentEpisodeM3u8(resolvedM3u8);
-            setCurrentEpisodeTitle(resolvedTitle);
-          }
-        } catch (err) {
-          console.error('Failed to load movie stream for playback:', err);
-        } finally {
-          setIsLoadingDetail(false);
-        }
-      }
-    },
-    []
-  );
-
-  const stopPlaying = useCallback(() => {
-    setPlayingMovie(null);
-    setCurrentEpisodeEmbed(null);
-    setCurrentEpisodeTitle(null);
-    setCurrentEpisodeM3u8(null);
-  }, []);
-
-  const playingMovieRef = useRef<Movie | null>(null);
-  playingMovieRef.current = playingMovie;
-
-  const setPlayingEpisode = useCallback((embedUrl: string, title?: string, m3u8Url?: string) => {
-    setCurrentEpisodeEmbed(embedUrl);
-    const cleanedTitle = title ? formatEpisodeTitle(title) : null;
-    if (cleanedTitle) setCurrentEpisodeTitle(cleanedTitle);
-
-    if (m3u8Url !== undefined) {
-      setCurrentEpisodeM3u8(m3u8Url);
-    } else {
-      let foundM3u8: string | null = null;
-      if (playingMovieRef.current?.episodesServers) {
-        for (const srv of playingMovieRef.current.episodesServers) {
-          const match = srv.items?.find(
-            (ep) =>
-              ep.embed === embedUrl ||
-              (cleanedTitle && formatEpisodeTitle(ep.name) === cleanedTitle)
-          );
-          if (match?.m3u8) {
-            foundM3u8 = match.m3u8;
-            break;
-          }
-        }
-      }
-      if (!foundM3u8 && playingMovieRef.current?.m3u8Url) {
-        foundM3u8 = playingMovieRef.current.m3u8Url;
-      }
-      setCurrentEpisodeM3u8(foundM3u8);
-    }
-  }, []);
-
-  const toggleMyList = useCallback((movie: Movie) => {
-    if (!movie) return;
-    const movieKey = movie.slug || movie.id;
-    const activeUser = currentUserRef.current;
-    const userStorageKey = activeUser?.username
-      ? `netflix_my_list_${activeUser.username}`
-      : 'netflix_my_list_guest';
-
-    setMyList((prev) => {
-      const exists = prev.some((item) => item.id === movie.id || (item.slug && item.slug === movie.slug));
-      let nextList: Movie[];
-      if (exists) {
-        nextList = prev.filter((item) => item.id !== movie.id && item.slug !== movie.slug);
-        if (activeUser?.username) {
-          fetch('/api/user/mylist', {
-            method: 'DELETE',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ key: movieKey }),
-          }).catch(() => {});
-        }
-      } else {
-        nextList = [movie, ...prev];
-        if (activeUser?.username) {
-          fetch('/api/user/mylist', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ key: movieKey, movie }),
-          }).catch(() => {});
-        }
-      }
-      try {
-        localStorage.setItem(userStorageKey, JSON.stringify(nextList));
-      } catch {
-        // ignore
-      }
-      return nextList;
-    });
-  }, []);
-
-  const isInMyList = useCallback(
-    (id: string) => {
-      return myList.some((item) => item.id === id || item.slug === id);
-    },
-    [myList]
-  );
-
-  // Reference to current user for callbacks
+  // User & Watch Progress references for callbacks
   const currentUserRef = useRef<AuthUser | null>(null);
   currentUserRef.current = currentUser;
 
-  // Initialize & sync user-scoped watch progress from localStorage and Firebase cloud
-  useEffect(() => {
-    if (!currentUser?.username) {
-      setWatchProgressMap({});
-      return;
-    }
+  const watchProgressMapRef = useRef<Record<string, WatchProgress>>({});
+  watchProgressMapRef.current = watchProgressMap;
 
-    const username = currentUser.username;
-    const userStorageKey = `netflix_watch_progress_${username}`;
+  const getWatchProgress = useCallback(
+    (slugOrId: string, movieObj?: Movie): WatchProgress | undefined => {
+      const map = watchProgressMapRef.current;
+      if (!slugOrId && !movieObj) return undefined;
 
-    // 1. Immediately hydrate from cached local storage for this user
-    try {
-      const cached = localStorage.getItem(userStorageKey);
-      if (cached) {
-        setWatchProgressMap(JSON.parse(cached));
-      } else {
-        setWatchProgressMap({});
+      // 1. Direct match by slugOrId
+      if (slugOrId && map[slugOrId]) {
+        return map[slugOrId];
       }
-    } catch {
-      setWatchProgressMap({});
-    }
 
-    // 2. Fetch cloud-synced progress from Firebase via /api/user/progress
-    fetch('/api/user/progress')
-      .then((res) => {
-        if (!res.ok) throw new Error('Not logged in');
-        return res.json();
-      })
-      .then((data) => {
-        if (data.progress && typeof data.progress === 'object') {
-          setWatchProgressMap((prev) => {
-            const merged = { ...prev, ...data.progress };
-            try {
-              localStorage.setItem(userStorageKey, JSON.stringify(merged));
-            } catch {}
-            return merged;
-          });
+      // 2. Canonical ID match if movieObj provided
+      if (movieObj) {
+        const canonicalKey = getCanonicalMovieId(movieObj);
+        if (canonicalKey && map[canonicalKey]) {
+          return map[canonicalKey];
         }
-      })
-      .catch(() => {});
-  }, [currentUser?.username]);
+      }
 
-  // Update Watch Progress (User-scoped & cloud synced)
-  const updateWatchProgress = useCallback(
-    (
-      movie: Movie,
-      currentTime: number,
-      duration: number,
-      episodeTitle?: string,
-      episodeEmbed?: string,
-      episodeM3u8?: string
-    ) => {
-      if (!movie) return;
-      const key = movie.slug || movie.id;
-      const movieSecs = movie.durationMinutes ? movie.durationMinutes * 60 : 45 * 60;
-      const validDuration = duration > 0 && duration !== 45 * 60 ? duration : movieSecs;
-      const percent = Math.min(100, Math.max(1, Math.round((currentTime / validDuration) * 100)));
-      const rawTitle = episodeTitle || movie.currentEpisode || 'Tập 1';
-      const epTitle = formatEpisodeTitle(rawTitle);
-      const epMatch = epTitle.match(/\d+/);
-      const epNumStr = epMatch ? epMatch[0] : epTitle;
-      const epNumPadded = epMatch ? epMatch[0].padStart(2, '0') : epTitle;
-
-      // Resolve m3u8 if not passed
-      let resolvedM3u8 = episodeM3u8 || null;
-      if (!resolvedM3u8 && movie.episodesServers) {
-        for (const srv of movie.episodesServers) {
-          const match = srv.items?.find(
-            (ep) =>
-              (episodeEmbed && ep.embed === episodeEmbed) ||
-              formatEpisodeTitle(ep.name) === epTitle ||
-              ep.name === epTitle
-          );
-          if (match?.m3u8) {
-            resolvedM3u8 = match.m3u8;
-            break;
+      // 3. Search across all entries using isSameMovie or matching IDs
+      const entries = Object.values(map);
+      for (const wp of entries) {
+        if (!wp) continue;
+        if (
+          (slugOrId && (wp.movieId === slugOrId || wp.movieSlug === slugOrId)) ||
+          (movieObj && wp.movie && isSameMovie(wp.movie, movieObj))
+        ) {
+          return wp;
+        }
+        if (movieObj) {
+          const fakeMovie: Partial<Movie> = {
+            id: wp.movieId,
+            slug: wp.movieSlug,
+            title: wp.movie?.title,
+            subTitle: wp.movie?.subTitle,
+            tmdbId: wp.movie?.tmdbId,
+            posterUrl: wp.movie?.posterUrl,
+            backdropUrl: wp.movie?.backdropUrl,
+          };
+          if (isSameMovie(fakeMovie as Movie, movieObj)) {
+            return wp;
           }
         }
       }
-      if (!resolvedM3u8) {
-        resolvedM3u8 = movie.m3u8Url || null;
-      }
 
-      const activeUser = currentUserRef.current;
-      const userStorageKey = activeUser?.username
-        ? `netflix_watch_progress_${activeUser.username}`
-        : 'netflix_watch_progress_guest';
-
-      setWatchProgressMap((prev) => {
-        const existing = prev[key];
-        const existingEpisodes = existing?.episodesProgress || {};
-
-        const epData: EpisodeProgress = {
-          currentTime: Math.round(currentTime),
-          duration: Math.round(validDuration),
-          progressPercent: percent,
-          updatedAt: Date.now(),
-          isCompleted: percent >= 90,
-          embedUrl: episodeEmbed || existing?.episodeEmbed || movie.embedUrl,
-          m3u8Url: resolvedM3u8 || existing?.episodeM3u8 || movie.m3u8Url,
-        };
-
-        const updatedEpisodes: Record<string, EpisodeProgress> = {
-          ...existingEpisodes,
-          [epTitle]: epData,
-          [rawTitle]: epData,
-          [epNumStr]: epData,
-          [epNumPadded]: epData,
-          [`Tập ${epNumStr}`]: epData,
-          [`Tập ${epNumPadded}`]: epData,
-        };
-
-        const progressItem: WatchProgress = {
-          movieId: movie.id,
-          movieSlug: movie.slug,
-          movie,
-          episodeTitle: epTitle,
-          episodeEmbed: episodeEmbed || existing?.episodeEmbed || movie.embedUrl,
-          episodeM3u8: resolvedM3u8 || existing?.episodeM3u8 || movie.m3u8Url,
-          currentTime: Math.round(currentTime),
-          duration: Math.round(validDuration),
-          progressPercent: percent,
-          updatedAt: Date.now(),
-          episodesProgress: updatedEpisodes,
-        };
-
-        const next: Record<string, WatchProgress> = {
-          ...prev,
-          [key]: progressItem,
-        };
-
-        try {
-          localStorage.setItem(userStorageKey, JSON.stringify(next));
-        } catch {
-          // ignore
-        }
-
-        // Sync to cloud Firebase in background
-        if (activeUser?.username) {
-          fetch('/api/user/progress', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ key, progress: progressItem }),
-          }).catch(() => {});
-        }
-
-        return next;
-      });
+      return undefined;
     },
     []
   );
 
-  const watchProgressMapRef = useRef<Record<string, WatchProgress>>({});
-  useEffect(() => {
-    watchProgressMapRef.current = watchProgressMap;
-  }, [watchProgressMap]);
-
-  const getWatchProgress = useCallback((slugOrId: string) => {
-    return watchProgressMapRef.current[slugOrId];
-  }, []);
-
   const getEpisodeProgress = useCallback(
-    (slugOrId: string, episodeNameOrNumber: string): EpisodeProgress | undefined => {
-      const wp = watchProgressMapRef.current[slugOrId];
+    (
+      slugOrId: string,
+      episodeNameOrNumber: string,
+      movieObj?: Movie
+    ): EpisodeProgress | undefined => {
+      const wp = getWatchProgress(slugOrId, movieObj);
       if (!wp) return undefined;
 
       const normKey = episodeNameOrNumber.toString().trim();
@@ -858,6 +371,705 @@ export const NetflixProvider: React.FC<{ children: React.ReactNode }> = ({ child
 
       return undefined;
     },
+    [getWatchProgress]
+  );
+
+  // Hover Popout State
+  const [hoveredMovie, setHoveredMovie] = useState<Movie | null>(null);
+  const [hoverRect, setHoverRect] = useState<HoverRect | null>(null);
+  const [isCardTrailerPlaying, setIsCardTrailerPlaying] = useState<boolean>(false);
+
+  // Initialize & sync user-scoped My List from Firebase cloud (DATABASE IS AUTHORITY)
+  useEffect(() => {
+    if (!currentUser?.username) {
+      setMyList([]);
+      return;
+    }
+
+    const username = currentUser.username;
+    const userStorageKey = `netflix_my_list_${username}`;
+
+    // 1. Initial quick hydrate from cached local storage
+    try {
+      const cached = localStorage.getItem(userStorageKey);
+      if (cached) {
+        const parsed = JSON.parse(cached);
+        setMyList(deduplicateMovies(parsed));
+      } else {
+        setMyList([]);
+      }
+    } catch {
+      setMyList([]);
+    }
+
+    // 2. Fetch cloud-synced My List from Firebase (Database is source of truth)
+    fetch('/api/user/mylist')
+      .then((res) => {
+        if (!res.ok) throw new Error('Not logged in');
+        return res.json();
+      })
+      .then((data) => {
+        if (data.myList && Array.isArray(data.myList)) {
+          // Deduplicate all cloud items using isSameMovie
+          const deduplicated = deduplicateMovies(data.myList);
+          setMyList(deduplicated);
+
+          try {
+            localStorage.setItem(userStorageKey, JSON.stringify(deduplicated));
+          } catch {}
+
+          // If duplicates existed in Firebase, clean them up from Firebase database
+          if (deduplicated.length < data.myList.length) {
+            for (const raw of data.myList) {
+              const isKept = deduplicated.some(
+                (d) => d.id === raw.id || (d.slug && raw.slug && d.slug === raw.slug)
+              );
+              if (!isKept) {
+                const k = raw.id || raw.slug;
+                if (k) {
+                  fetch('/api/user/mylist', {
+                    method: 'DELETE',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ key: k }),
+                  }).catch(() => {});
+                }
+              }
+            }
+          }
+        }
+      })
+      .catch(() => {});
+  }, [currentUser?.username]);
+
+  const openModal = useCallback(async (movie: Movie) => {
+    if (!movie) return;
+
+    // Immediately resolve logo from client cache if currently missing on object
+    const canonicalId = getCanonicalMovieId(movie);
+    const initialMovie: Movie = { ...movie };
+    if (!initialMovie.logoUrl) {
+      const cachedLogo =
+        clientLogoCache.get(canonicalId) ||
+        (movie.slug ? clientLogoCache.get(movie.slug) : null) ||
+        (movie.id ? clientLogoCache.get(movie.id) : null) ||
+        (movie.tmdbId ? clientLogoCache.get(`tmdb_${movie.tmdbId}`) : null) ||
+        (movie.tmdb?.id ? clientLogoCache.get(`tmdb_${movie.tmdb.id}`) : null);
+      if (cachedLogo) {
+        initialMovie.logoUrl = cachedLogo;
+      }
+    }
+
+    setSelectedMovie(initialMovie);
+
+    let targetSlug = initialMovie.slug;
+    const resolvedTmdbId = initialMovie.tmdb?.id || initialMovie.tmdbId;
+
+    try {
+      setIsLoadingDetail(true);
+
+      // 1. Cross-reference bidirectionally between PhimAPI and TMDB:
+      // Verifies title, release year, director matching, and cast members overlap.
+      // Retrieves transparent HD logo, 4K backdrops/posters, official synopsis, cast & crew.
+      const enrichPromise = (async () => {
+        try {
+          const res = await fetch('/api/movie/enrich', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(initialMovie),
+          });
+          if (res.ok) {
+            const data = await res.json();
+            if (data.movie) return data.movie as Movie;
+          }
+        } catch {}
+        return crossMatchAndEnrichMovie(initialMovie);
+      })().catch((err) => {
+        console.warn('Cross-match enrichment error:', err);
+        return initialMovie;
+      });
+
+      // 2. Concurrently fetch PhimAPI detail for playable streaming servers / episodes
+      const detailPromise = (async () => {
+        let det: Movie | null = null;
+        if (resolvedTmdbId) {
+          try {
+            det = await getMovieDetailByTmdb(
+              resolvedTmdbId,
+              initialMovie.type === 'series' ? 'tv' : 'movie'
+            );
+            if (det?.slug) targetSlug = det.slug;
+          } catch {}
+        }
+
+        if (!det && targetSlug) {
+          try {
+            det = await getMovieDetail(targetSlug);
+          } catch {}
+        }
+
+        if (!det && (!initialMovie.episodesServers || initialMovie.episodesServers.length === 0)) {
+          try {
+            const match = await findNguonCMatch(initialMovie.title, initialMovie.subTitle, {
+              year: initialMovie.year,
+              type: initialMovie.type,
+              tmdbId: resolvedTmdbId,
+            });
+            if (match?.slug && match.slug !== targetSlug) {
+              targetSlug = match.slug;
+              det = await getMovieDetail(targetSlug);
+            }
+          } catch (err) {
+            console.warn('Fallback movie lookup error:', err);
+          }
+        }
+        return det;
+      })();
+
+      const [enriched, detailed] = await Promise.all([enrichPromise, detailPromise]);
+
+      let finalMovie = detailed ? mergeMovieData(enriched, detailed) : enriched;
+      if (targetSlug) {
+        finalMovie.slug = targetSlug;
+      }
+
+      // Propagate logo everywhere in clientLogoCache and sessionStorage
+      if (finalMovie.logoUrl) {
+        clientLogoCache.set(canonicalId, finalMovie.logoUrl);
+        if (finalMovie.slug) clientLogoCache.set(finalMovie.slug, finalMovie.logoUrl);
+        if (finalMovie.id) clientLogoCache.set(finalMovie.id, finalMovie.logoUrl);
+        if (initialMovie.slug) clientLogoCache.set(initialMovie.slug, finalMovie.logoUrl);
+        if (initialMovie.id) clientLogoCache.set(initialMovie.id, finalMovie.logoUrl);
+        if (resolvedTmdbId) clientLogoCache.set(`tmdb_${resolvedTmdbId}`, finalMovie.logoUrl);
+        try {
+          sessionStorage.setItem(`netlix_logo_v3_${finalMovie.slug || canonicalId}`, finalMovie.logoUrl);
+          sessionStorage.setItem(`netlix_logo_v3_${canonicalId}`, finalMovie.logoUrl);
+        } catch {}
+      }
+
+      setSelectedMovie((prev) => {
+        if (!prev) return finalMovie;
+        return mergeMovieData(finalMovie, prev);
+      });
+    } catch (err) {
+      console.warn('Modal movie detail resolution error:', err);
+    } finally {
+      setIsLoadingDetail(false);
+    }
+  }, []);
+
+  const closeModal = useCallback(() => {
+    setSelectedMovie(null);
+  }, []);
+
+  const startPlaying = useCallback(
+    async (
+      movie: Movie,
+      episodeEmbedUrl?: string,
+      episodeTitle?: string,
+      episodeM3u8Url?: string
+    ) => {
+      if (!movie) return;
+
+      const key = movie.slug || movie.id;
+      const wp = getWatchProgress(key, movie);
+
+      // 1. If an episode was explicitly passed OR previously watched, resume that episode
+      let targetEmbed = episodeEmbedUrl || wp?.episodeEmbed || movie.embedUrl || null;
+      let targetTitle = episodeTitle || wp?.episodeTitle || movie.currentEpisode || null;
+      if (targetTitle) {
+        targetTitle = formatEpisodeTitle(targetTitle);
+      }
+
+      // Explicitly resolved m3u8 for target episode
+      let targetM3u8: string | null = episodeM3u8Url || null;
+
+      // If targetM3u8 is not directly provided, search within movie.episodesServers or movie.seasonsList for targetTitle or targetEmbed
+      if (!targetM3u8 && movie.episodesServers) {
+        for (const srv of movie.episodesServers) {
+          const found = srv.items?.find(
+            (ep) =>
+              (targetEmbed && ep.embed === targetEmbed) ||
+              (targetTitle && formatEpisodeTitle(ep.name) === targetTitle) ||
+              (targetTitle && ep.name === targetTitle)
+          );
+          if (found?.m3u8) {
+            targetM3u8 = found.m3u8;
+            break;
+          }
+        }
+      }
+      if (!targetM3u8 && movie.seasonsList) {
+        for (const s of movie.seasonsList) {
+          const found = s.episodes?.find(
+            (ep) =>
+              (targetEmbed && ep.embedUrl === targetEmbed) ||
+              (targetTitle && formatEpisodeTitle(ep.title) === targetTitle) ||
+              (targetTitle && ep.title === targetTitle)
+          );
+          if (found?.m3u8Url) {
+            targetM3u8 = found.m3u8Url;
+            break;
+          }
+        }
+      }
+
+      // If still no targetM3u8, check watch progress matching the episode
+      if (!targetM3u8 && wp?.episodeM3u8) {
+        if (!targetTitle || formatEpisodeTitle(wp.episodeTitle || '') === targetTitle) {
+          targetM3u8 = wp.episodeM3u8;
+        }
+      }
+
+      // ONLY fallback to movie.m3u8Url if it's a single movie or we are on Episode 1!
+      const isMovieOrEp1 = movie.type === 'movie' || !targetTitle || targetTitle === 'Tập 1' || targetTitle === 'Tập 01';
+      if (!targetM3u8 && isMovieOrEp1 && movie.m3u8Url) {
+        targetM3u8 = movie.m3u8Url;
+      }
+
+      setPlayingMovie(movie);
+      setCurrentEpisodeEmbed(targetEmbed);
+      setCurrentEpisodeTitle(targetTitle);
+      setCurrentEpisodeM3u8(targetM3u8);
+
+      // Resolve slug dynamically if missing
+      let activeSlug = movie.slug;
+      const resolvedTmdbId = movie.tmdb?.id || movie.tmdbId;
+
+      if (!targetEmbed && !activeSlug) {
+        try {
+          const match = await findNguonCMatch(movie.title, movie.subTitle, {
+            year: movie.year,
+            type: movie.type,
+            tmdbId: resolvedTmdbId,
+          });
+          if (match?.slug) {
+            activeSlug = match.slug;
+          }
+        } catch {}
+      }
+
+      // 2. If target episode is missing m3u8 or movie lacks full streaming servers, fetch detail from PhimAPI
+      if ((!targetM3u8 || !movie.episodesServers?.length) && (activeSlug || resolvedTmdbId)) {
+        try {
+          setIsLoadingDetail(true);
+          let detailed: Movie | null = null;
+
+          if (resolvedTmdbId) {
+            try {
+              detailed = await getMovieDetailByTmdb(
+                resolvedTmdbId,
+                movie.type === 'series' ? 'tv' : 'movie'
+              );
+              if (detailed?.slug) activeSlug = detailed.slug;
+            } catch {}
+          }
+
+          if (!detailed && activeSlug) {
+            detailed = await getMovieDetail(activeSlug);
+          }
+
+          if (detailed) {
+            setPlayingMovie((prev) => {
+              if (!prev) return detailed;
+              return mergeMovieData(prev, detailed);
+            });
+
+            // Find matching episode in detailed
+            let resolvedEp: any = null;
+            if (detailed.episodesServers) {
+              for (const srv of detailed.episodesServers) {
+                const found = srv.items?.find(
+                  (ep) =>
+                    (targetEmbed && ep.embed === targetEmbed) ||
+                    (targetTitle && formatEpisodeTitle(ep.name) === targetTitle) ||
+                    (targetTitle && ep.name === targetTitle)
+                );
+                if (found) {
+                  resolvedEp = found;
+                  break;
+                }
+              }
+            }
+
+            const firstServer = detailed.episodesServers?.[0];
+            const firstEp = resolvedEp || firstServer?.items?.[0];
+            const resolvedEmbed = targetEmbed || firstEp?.embed || detailed.embedUrl || null;
+            const resolvedM3u8 = resolvedEp?.m3u8 || targetM3u8 || (isMovieOrEp1 ? (firstEp?.m3u8 || detailed.m3u8Url) : null);
+            const resolvedTitle = targetTitle || (firstEp
+              ? formatEpisodeTitle(firstEp.name)
+              : (detailed.currentEpisode ? formatEpisodeTitle(detailed.currentEpisode) : 'Tập 1'));
+
+            setCurrentEpisodeEmbed(resolvedEmbed);
+            setCurrentEpisodeM3u8(resolvedM3u8);
+            setCurrentEpisodeTitle(resolvedTitle);
+          }
+        } catch (err) {
+          console.error('Failed to load movie stream for playback:', err);
+        } finally {
+          setIsLoadingDetail(false);
+        }
+      }
+    },
+    []
+  );
+
+  const stopPlaying = useCallback(() => {
+    setPlayingMovie(null);
+    setCurrentEpisodeEmbed(null);
+    setCurrentEpisodeTitle(null);
+    setCurrentEpisodeM3u8(null);
+  }, []);
+
+  const playingMovieRef = useRef<Movie | null>(null);
+  playingMovieRef.current = playingMovie;
+
+  const setPlayingEpisode = useCallback((embedUrl: string, title?: string, m3u8Url?: string) => {
+    setCurrentEpisodeEmbed(embedUrl);
+    const cleanedTitle = title ? formatEpisodeTitle(title) : null;
+    if (cleanedTitle) setCurrentEpisodeTitle(cleanedTitle);
+
+    if (m3u8Url && m3u8Url.trim()) {
+      setCurrentEpisodeM3u8(m3u8Url.trim());
+    } else {
+      let foundM3u8: string | null = null;
+      if (playingMovieRef.current?.episodesServers) {
+        for (const srv of playingMovieRef.current.episodesServers) {
+          const match = srv.items?.find(
+            (ep) =>
+              (embedUrl && ep.embed === embedUrl) ||
+              (cleanedTitle && formatEpisodeTitle(ep.name) === cleanedTitle)
+          );
+          if (match?.m3u8) {
+            foundM3u8 = match.m3u8;
+            break;
+          }
+        }
+      }
+      // ONLY fallback to playingMovieRef.current.m3u8Url if Episode 1 or Movie!
+      const isMovieOrEp1 =
+        playingMovieRef.current?.type === 'movie' ||
+        !cleanedTitle ||
+        cleanedTitle === 'Tập 1' ||
+        cleanedTitle === 'Tập 01';
+
+      if (!foundM3u8 && isMovieOrEp1 && playingMovieRef.current?.m3u8Url) {
+        foundM3u8 = playingMovieRef.current.m3u8Url;
+      }
+      setCurrentEpisodeM3u8(foundM3u8);
+    }
+  }, []);
+
+  const toggleMyList = useCallback((movie: Movie) => {
+    if (!movie) return;
+    const movieKey = getCanonicalMovieId(movie);
+    const rawKey = movie.slug || movie.id;
+    const activeUser = currentUserRef.current;
+    const userStorageKey = activeUser?.username
+      ? `netflix_my_list_${activeUser.username}`
+      : 'netflix_my_list_guest';
+
+    setMyList((prev) => {
+      const exists = prev.some((item) => isSameMovie(item, movie));
+      let nextList: Movie[];
+      if (exists) {
+        // Collect all keys/slugs/ids matching this movie to remove from Firebase
+        const matchedItems = prev.filter((item) => isSameMovie(item, movie));
+        nextList = prev.filter((item) => !isSameMovie(item, movie));
+        if (activeUser?.username) {
+          const keysToDelete = new Set<string>();
+          keysToDelete.add(movieKey);
+          if (rawKey) keysToDelete.add(rawKey);
+          if (movie.id) keysToDelete.add(movie.id);
+          if (movie.slug) keysToDelete.add(movie.slug);
+          matchedItems.forEach((it) => {
+            if (it.id) keysToDelete.add(it.id);
+            if (it.slug) keysToDelete.add(it.slug);
+            const cKey = getCanonicalMovieId(it);
+            if (cKey) keysToDelete.add(cKey);
+          });
+          keysToDelete.forEach((k) => {
+            fetch('/api/user/mylist', {
+              method: 'DELETE',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ key: k }),
+            }).catch(() => {});
+          });
+        }
+      } else {
+        const canonicalMovie: Movie = {
+          ...movie,
+          id: movie.id || movieKey,
+        };
+        nextList = deduplicateMovies([canonicalMovie, ...prev]);
+        if (activeUser?.username) {
+          fetch('/api/user/mylist', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ key: movieKey, movie: canonicalMovie }),
+          }).catch(() => {});
+        }
+      }
+      try {
+        localStorage.setItem(userStorageKey, JSON.stringify(nextList));
+      } catch {
+        // ignore
+      }
+      return nextList;
+    });
+  }, []);
+
+  const isInMyList = useCallback(
+    (id: string, movieObj?: Movie) => {
+      if (!id && !movieObj) return false;
+      return myList.some((item) => {
+        if (movieObj && isSameMovie(item, movieObj)) return true;
+        if (id && (item.id === id || item.slug === id)) return true;
+        if (id && getCanonicalMovieId(item) === id) return true;
+        return false;
+      });
+    },
+    [myList]
+  );
+
+  // Initialize & sync user-scoped watch progress from Firebase cloud (DATABASE IS AUTHORITY)
+  useEffect(() => {
+    if (!currentUser?.username) {
+      setWatchProgressMap({});
+      return;
+    }
+
+    const username = currentUser.username;
+    const userStorageKey = `netflix_watch_progress_${username}`;
+
+    // 1. Initial hydrate from local storage as placeholder only
+    try {
+      const cached = localStorage.getItem(userStorageKey);
+      if (cached) {
+        const parsed = JSON.parse(cached);
+        setWatchProgressMap(deduplicateWatchProgressMap(parsed));
+      } else {
+        setWatchProgressMap({});
+      }
+    } catch {
+      setWatchProgressMap({});
+    }
+
+    // 2. Fetch cloud-synced progress from Firebase (Database is source of truth)
+    fetch('/api/user/progress')
+      .then((res) => {
+        if (!res.ok) throw new Error('Not logged in');
+        return res.json();
+      })
+      .then((data) => {
+        if (data.progress && typeof data.progress === 'object') {
+          // Cloud records are the authority!
+          const cloudMap: Record<string, WatchProgress> = data.progress;
+          const dedupedCloud = deduplicateWatchProgressMap(cloudMap);
+
+          setWatchProgressMap((prev) => {
+            // Database is the authority: cloud overwrites local unless local timestamp is strictly newer
+            const merged: Record<string, WatchProgress> = { ...dedupedCloud };
+            for (const [k, localWp] of Object.entries(prev)) {
+              if (!localWp) continue;
+              // Check if cloud already has this movie
+              let matchedCloudKey: string | null = null;
+              for (const [ck, cWp] of Object.entries(merged)) {
+                if (cWp?.movie && localWp?.movie && isSameMovie(cWp.movie, localWp.movie)) {
+                  matchedCloudKey = ck;
+                  break;
+                }
+              }
+
+              if (matchedCloudKey) {
+                // If local is strictly newer by at least 15s (actively played seconds ago), keep local and sync to cloud
+                const cloudWp = merged[matchedCloudKey];
+                if ((localWp.updatedAt || 0) > (cloudWp.updatedAt || 0) + 15000) {
+                  merged[matchedCloudKey] = localWp;
+                  fetch('/api/user/progress', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ key: matchedCloudKey, progress: localWp }),
+                  }).catch(() => {});
+                }
+              }
+            }
+
+            const finalMap = deduplicateWatchProgressMap(merged);
+            try {
+              localStorage.setItem(userStorageKey, JSON.stringify(finalMap));
+            } catch {}
+
+            // Clean up old duplicate keys in Firebase if any were consolidated
+            const cloudKeys = Object.keys(cloudMap);
+            const finalKeys = new Set(Object.keys(finalMap));
+            for (const ck of cloudKeys) {
+              if (!finalKeys.has(ck)) {
+                fetch('/api/user/progress', {
+                  method: 'DELETE',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ key: ck }),
+                }).catch(() => {});
+              }
+            }
+
+            return finalMap;
+          });
+        }
+      })
+      .catch(() => {});
+  }, [currentUser?.username]);
+
+  // Update Watch Progress (User-scoped & cloud synced with fixed canonical ID)
+  const updateWatchProgress = useCallback(
+    (
+      movie: Movie,
+      currentTime: number,
+      duration: number,
+      episodeTitle?: string,
+      episodeEmbed?: string,
+      episodeM3u8?: string
+    ) => {
+      if (!movie) return;
+      const canonicalKey = getCanonicalMovieId(movie);
+      const rawKey = movie.slug || movie.id;
+      const movieSecs = movie.durationMinutes ? movie.durationMinutes * 60 : 45 * 60;
+      const validDuration = duration > 0 && duration !== 45 * 60 ? duration : movieSecs;
+      const percent = Math.min(100, Math.max(1, Math.round((currentTime / validDuration) * 100)));
+      const rawTitle = episodeTitle || movie.currentEpisode || 'Tập 1';
+      const epTitle = formatEpisodeTitle(rawTitle);
+      const epMatch = epTitle.match(/\d+/);
+      const epNumStr = epMatch ? epMatch[0] : epTitle;
+      const epNumPadded = epMatch ? epMatch[0].padStart(2, '0') : epTitle;
+
+      // Resolve m3u8 if not passed
+      let resolvedM3u8 = episodeM3u8 || null;
+      if (!resolvedM3u8 && movie.episodesServers) {
+        for (const srv of movie.episodesServers) {
+          const match = srv.items?.find(
+            (ep) =>
+              (episodeEmbed && ep.embed === episodeEmbed) ||
+              formatEpisodeTitle(ep.name) === epTitle ||
+              ep.name === epTitle
+          );
+          if (match?.m3u8) {
+            resolvedM3u8 = match.m3u8;
+            break;
+          }
+        }
+      }
+      if (!resolvedM3u8) {
+        resolvedM3u8 = movie.m3u8Url || null;
+      }
+
+      const activeUser = currentUserRef.current;
+      const userStorageKey = activeUser?.username
+        ? `netflix_watch_progress_${activeUser.username}`
+        : 'netflix_watch_progress_guest';
+
+      setWatchProgressMap((prev) => {
+        // Find existing record: direct key, canonicalKey, or isSameMovie
+        let existingKey: string | null = null;
+        let existing: WatchProgress | undefined = prev[canonicalKey] || (rawKey ? prev[rawKey] : undefined);
+        if (existing) {
+          existingKey = prev[canonicalKey] ? canonicalKey : rawKey;
+        } else {
+          for (const [k, v] of Object.entries(prev)) {
+            if (v?.movie && isSameMovie(v.movie, movie)) {
+              existing = v;
+              existingKey = k;
+              break;
+            }
+          }
+        }
+
+        // Safety check: if incoming currentTime is <= 5 (e.g. initialization glitch)
+        // but existing already has progress for this same episode, do not overwrite with 0!
+        const existingEpisodes = existing?.episodesProgress || {};
+        const prevEpData =
+          existingEpisodes[epTitle] ||
+          existingEpisodes[rawTitle] ||
+          (epNumStr ? existingEpisodes[epNumStr] : undefined);
+
+        let finalCurrentTime = Math.round(currentTime);
+        let finalPercent = percent;
+
+        if (finalCurrentTime <= 5 && prevEpData && prevEpData.currentTime > 5 && !prevEpData.isCompleted) {
+          finalCurrentTime = prevEpData.currentTime;
+          finalPercent = prevEpData.progressPercent;
+        }
+
+        const epData: EpisodeProgress = {
+          currentTime: finalCurrentTime,
+          duration: Math.round(validDuration),
+          progressPercent: finalPercent,
+          updatedAt: Date.now(),
+          isCompleted: finalPercent >= 90,
+          embedUrl: episodeEmbed || existing?.episodeEmbed || movie.embedUrl,
+          m3u8Url: resolvedM3u8 || existing?.episodeM3u8 || movie.m3u8Url,
+        };
+
+        const updatedEpisodes: Record<string, EpisodeProgress> = {
+          ...existingEpisodes,
+          [epTitle]: epData,
+          [rawTitle]: epData,
+          [epNumStr]: epData,
+          [epNumPadded]: epData,
+          [`Tập ${epNumStr}`]: epData,
+          [`Tập ${epNumPadded}`]: epData,
+        };
+
+        // Merge movie metadata so rich episode/stream data is retained
+        const mergedMovie = existing?.movie ? mergeMovieData(existing.movie, movie) : movie;
+
+        const progressItem: WatchProgress = {
+          movieId: mergedMovie.id || canonicalKey,
+          movieSlug: mergedMovie.slug || movie.slug,
+          movie: mergedMovie,
+          episodeTitle: epTitle,
+          episodeEmbed: episodeEmbed || existing?.episodeEmbed || movie.embedUrl,
+          episodeM3u8: resolvedM3u8 || existing?.episodeM3u8 || movie.m3u8Url,
+          currentTime: finalCurrentTime,
+          duration: Math.round(validDuration),
+          progressPercent: finalPercent,
+          updatedAt: Date.now(),
+          episodesProgress: updatedEpisodes,
+        };
+
+        const next: Record<string, WatchProgress> = { ...prev };
+        if (existingKey && existingKey !== canonicalKey) {
+          delete next[existingKey];
+          if (activeUser?.username) {
+            fetch('/api/user/progress', {
+              method: 'DELETE',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ key: existingKey }),
+            }).catch(() => {});
+          }
+        }
+        if (rawKey && rawKey !== canonicalKey && next[rawKey]) {
+          delete next[rawKey];
+        }
+
+        next[canonicalKey] = progressItem;
+
+        try {
+          localStorage.setItem(userStorageKey, JSON.stringify(next));
+        } catch {
+          // ignore
+        }
+
+        // Sync to cloud Firebase in background (Database is source of truth)
+        if (activeUser?.username) {
+          fetch('/api/user/progress', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ key: canonicalKey, progress: progressItem }),
+          }).catch(() => {});
+        }
+
+        return next;
+      });
+    },
     []
   );
 
@@ -869,35 +1081,60 @@ export const NetflixProvider: React.FC<{ children: React.ReactNode }> = ({ child
 
     setWatchProgressMap((prev) => {
       const copy = { ...prev };
-      delete copy[slugOrId];
+      const keysToDelete: string[] = [];
+      for (const [k, v] of Object.entries(copy)) {
+        if (k === slugOrId || v?.movieId === slugOrId || v?.movieSlug === slugOrId) {
+          keysToDelete.push(k);
+        } else if (v?.movie && (v.movie.id === slugOrId || v.movie.slug === slugOrId)) {
+          keysToDelete.push(k);
+        }
+      }
+      if (!keysToDelete.includes(slugOrId)) {
+        keysToDelete.push(slugOrId);
+      }
+      keysToDelete.forEach((k) => delete copy[k]);
+
       try {
         localStorage.setItem(userStorageKey, JSON.stringify(copy));
       } catch {
         // ignore
       }
+
+      if (activeUser?.username) {
+        keysToDelete.forEach((k) => {
+          fetch('/api/user/progress', {
+            method: 'DELETE',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ key: k }),
+          }).catch(() => {});
+        });
+      }
+
       return copy;
     });
-
-    if (activeUser?.username) {
-      fetch('/api/user/progress', {
-        method: 'DELETE',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ key: slugOrId }),
-      }).catch(() => {});
-    }
   }, []);
 
-  // Derive continueWatchingList
-  const continueWatchingList = Object.values(watchProgressMap)
-    .filter((wp) => wp && wp.movie && (wp.progressPercent || 0) < 95)
-    .sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0))
-    .map((wp) => ({
+  // Derive continueWatchingList (Deduplicated and ordered by latest update)
+  const continueWatchingList = useMemo(() => {
+    const dedupedMap = deduplicateWatchProgressMap(watchProgressMap);
+    const sortedProgress = Object.values(dedupedMap)
+      .filter((wp) => wp && wp.movie && (wp.progressPercent || 0) < 95)
+      .sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
+
+    const movies: Movie[] = sortedProgress.map((wp) => ({
       ...wp.movie,
       progress: wp.progressPercent,
-      currentEpisode: wp.episodeTitle ? formatEpisodeTitle(wp.episodeTitle) : (wp.movie?.currentEpisode ? formatEpisodeTitle(wp.movie.currentEpisode) : undefined),
+      currentEpisode: wp.episodeTitle
+        ? formatEpisodeTitle(wp.episodeTitle)
+        : wp.movie?.currentEpisode
+        ? formatEpisodeTitle(wp.movie.currentEpisode)
+        : undefined,
       embedUrl: wp.episodeEmbed || wp.movie?.embedUrl,
       m3u8Url: wp.episodeM3u8 || wp.movie?.m3u8Url,
     }));
+
+    return deduplicateMovies(movies);
+  }, [watchProgressMap]);
 
   // Hover Popout Coordination State & Timers
   const hoveredMovieRef = useRef<Movie | null>(null);
