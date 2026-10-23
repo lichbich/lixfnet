@@ -20,6 +20,28 @@ import {
 } from 'lucide-react';
 import { useNetflix } from '@/context/NetflixContext';
 import { getMovieDetail, formatEpisodeTitle } from '@/services/movieApi';
+import { cleanM3u8Manifest } from '@/lib/m3u8Filter';
+
+/**
+ * Custom HLS Playlist Loader that intercepts and strips mid-roll gambling ads
+ * directly from the M3U8 manifest before Hls.js parses fragments.
+ */
+class CleanPlaylistLoader extends (Hls.DefaultConfig.loader as any) {
+  constructor(config: any) {
+    super(config);
+    const origLoad = this.load.bind(this);
+    this.load = function (context: any, cfg: any, callbacks: any) {
+      const origSuccess = callbacks.onSuccess;
+      callbacks.onSuccess = function (response: any, stats: any, ctx: any, networkDetails: any) {
+        if (response && typeof response.data === 'string') {
+          response.data = cleanM3u8Manifest(response.data);
+        }
+        origSuccess(response, stats, ctx, networkDetails);
+      };
+      origLoad(context, cfg, callbacks);
+    };
+  }
+}
 
 export const VideoPlayerModal: React.FC = () => {
   const {
@@ -466,6 +488,7 @@ export const VideoPlayerModal: React.FC = () => {
         enableWorker: true,
         lowLatencyMode: false,
         backBufferLength: 90,
+        pLoader: CleanPlaylistLoader as any,
       });
       hlsRef.current = hls;
 
