@@ -2,7 +2,7 @@
 
 import React, { createContext, useContext, useState, useEffect, useCallback, useRef } from 'react';
 import { Movie, EpisodeServer, WatchProgress, EpisodeProgress } from '@/types';
-import { getMovieDetail } from '@/services/movieApi';
+import { getMovieDetail, getMovieDetailByTmdb, formatEpisodeTitle } from '@/services/movieApi';
 import { findNguonCMatch } from '@/services/trendingService';
 
 interface HoverRect {
@@ -23,9 +23,12 @@ interface NetflixContextType {
   playingMovie: Movie | null;
   currentEpisodeEmbed: string | null;
   currentEpisodeTitle: string | null;
+  currentEpisodeM3u8: string | null;
   myList: Movie[];
   searchQuery: string;
   isMuted: boolean;
+  trailerVolume: number;
+  setTrailerVolume: (volume: number) => void;
   isLoadingDetail: boolean;
   // Auth & Account Management
   currentUser: AuthUser | null;
@@ -42,7 +45,8 @@ interface NetflixContextType {
     currentTime: number,
     duration: number,
     episodeTitle?: string,
-    episodeEmbed?: string
+    episodeEmbed?: string,
+    episodeM3u8?: string
   ) => void;
   getWatchProgress: (slugOrId: string) => WatchProgress | undefined;
   getEpisodeProgress: (slugOrId: string, episodeNameOrNumber: string) => EpisodeProgress | undefined;
@@ -62,9 +66,14 @@ interface NetflixContextType {
   // Actions
   openModal: (movie: Movie) => void;
   closeModal: () => void;
-  startPlaying: (movie: Movie, episodeEmbedUrl?: string, episodeTitle?: string) => void;
+  startPlaying: (
+    movie: Movie,
+    episodeEmbedUrl?: string,
+    episodeTitle?: string,
+    episodeM3u8Url?: string
+  ) => void;
   stopPlaying: () => void;
-  setPlayingEpisode: (embedUrl: string, title?: string) => void;
+  setPlayingEpisode: (embedUrl: string, title?: string, m3u8Url?: string) => void;
   toggleMyList: (movie: Movie) => void;
   isInMyList: (id: string) => boolean;
   toggleMute: () => void;
@@ -78,6 +87,7 @@ export const NetflixProvider: React.FC<{ children: React.ReactNode }> = ({ child
   const [playingMovie, setPlayingMovie] = useState<Movie | null>(null);
   const [currentEpisodeEmbed, setCurrentEpisodeEmbed] = useState<string | null>(null);
   const [currentEpisodeTitle, setCurrentEpisodeTitle] = useState<string | null>(null);
+  const [currentEpisodeM3u8, setCurrentEpisodeM3u8] = useState<string | null>(null);
   const [myList, setMyList] = useState<Movie[]>([]);
   const [searchQuery, setSearchQuery] = useState<string>('');
   // Audio Mute Preference (Default: Unmuted / Sound ON, stored per user)
@@ -89,13 +99,29 @@ export const NetflixProvider: React.FC<{ children: React.ReactNode }> = ({ child
     } catch {}
     return false; // Mặc định bật tiếng
   });
+
+  // Trailer Volume Preference (Default: 60%, stored in localStorage per user)
+  const [trailerVolume, setTrailerVolumeState] = useState<number>(() => {
+    if (typeof window === 'undefined') return 60;
+    try {
+      const saved = localStorage.getItem('netflix_trailer_volume');
+      if (saved !== null) {
+        const parsed = Number(saved);
+        if (!isNaN(parsed) && parsed >= 0 && parsed <= 100) return parsed;
+      }
+    } catch {}
+    return 60; // 60% default trailer volume
+  });
+  const trailerVolumeRef = useRef(trailerVolume);
+  trailerVolumeRef.current = trailerVolume;
+
   const [isLoadingDetail, setIsLoadingDetail] = useState<boolean>(false);
 
   // Auth & Account Management State
   const [currentUser, setCurrentUser] = useState<AuthUser | null>(null);
   const [isCreateUserModalOpen, setIsCreateUserModalOpen] = useState<boolean>(false);
 
-  // Sync user-specific mute preference when user logs in or switches
+  // Sync user-specific mute and volume preference when user logs in or switches
   useEffect(() => {
     if (typeof window === 'undefined') return;
     try {
@@ -110,6 +136,22 @@ export const NetflixProvider: React.FC<{ children: React.ReactNode }> = ({ child
           setIsMuted(globalSaved === 'true');
         } else {
           setIsMuted(false); // Mặc định bật tiếng
+        }
+      }
+
+      // Sync user-specific trailer volume
+      const volStorageKey = user ? `netflix_trailer_volume_${user}` : 'netflix_trailer_volume_guest';
+      const userVol = localStorage.getItem(volStorageKey);
+      if (userVol !== null) {
+        const parsed = Number(userVol);
+        if (!isNaN(parsed) && parsed >= 0 && parsed <= 100) setTrailerVolumeState(parsed);
+      } else {
+        const globalVol = localStorage.getItem('netflix_trailer_volume');
+        if (globalVol !== null) {
+          const parsed = Number(globalVol);
+          if (!isNaN(parsed) && parsed >= 0 && parsed <= 100) setTrailerVolumeState(parsed);
+        } else {
+          setTrailerVolumeState(60);
         }
       }
     } catch {}
@@ -227,74 +269,96 @@ export const NetflixProvider: React.FC<{ children: React.ReactNode }> = ({ child
     setSelectedMovie(movie);
 
     let targetSlug = movie.slug;
+    let detailed: Movie | null = null;
 
-    // If the movie has no slug and no episodes, try on-demand lookup against NguonC with strict cross-validation
-    if (!targetSlug && (!movie.episodesServers || movie.episodesServers.length === 0)) {
-      try {
-        setIsLoadingDetail(true);
-        const match = await findNguonCMatch(movie.title, movie.subTitle, {
-          year: movie.year,
-          type: movie.type,
-        });
-        if (match?.slug) {
-          targetSlug = match.slug;
-        }
-      } catch (err) {
-        console.warn('Fallback NguonC lookup error:', err);
+    const resolvedTmdbId = movie.tmdb?.id || movie.tmdbId;
+
+    try {
+      setIsLoadingDetail(true);
+
+      // Stage 1: Try TMDB ID lookup if available (100% precision)
+      if (resolvedTmdbId) {
+        try {
+          detailed = await getMovieDetailByTmdb(
+            resolvedTmdbId,
+            movie.type === 'series' ? 'tv' : 'movie'
+          );
+          if (detailed?.slug) {
+            targetSlug = detailed.slug;
+          }
+        } catch {}
       }
-    }
 
-    // If a slug is resolved, fetch full API detail to get real episodes and streaming servers
-    if (targetSlug) {
-      try {
-        setIsLoadingDetail(true);
-        const detailed = await getMovieDetail(targetSlug);
-        if (detailed) {
-          setSelectedMovie((prev) => {
-            if (!prev) return detailed;
+      // Stage 2: Direct lookup by targetSlug if not resolved by TMDB
+      if (!detailed && targetSlug) {
+        try {
+          detailed = await getMovieDetail(targetSlug);
+        } catch {}
+      }
 
-            const hasEpisodes = Boolean(detailed.episodesServers && detailed.episodesServers.length > 0);
-
-            return {
-              ...detailed,
-              ...prev, // Prev preserves high-fidelity title, posters, synopsis, logoUrl, year, rating
-              slug: targetSlug || prev.slug,
-              embedUrl: detailed.embedUrl || prev.embedUrl,
-              episodesServers: hasEpisodes ? detailed.episodesServers : prev.episodesServers,
-              currentEpisode: detailed.currentEpisode || prev.currentEpisode,
-              seasons: detailed.seasons || prev.seasons,
-              duration: detailed.duration || prev.duration,
-              durationMinutes: detailed.durationMinutes || prev.durationMinutes,
-              isAvailable: hasEpisodes ? true : (prev.isAvailable ?? detailed.isAvailable),
-              genres:
-                detailed.genres && detailed.genres.length > 0 && detailed.genres[0] !== 'Phim hot'
-                  ? detailed.genres
-                  : prev.genres || detailed.genres,
-              logoUrl: prev.logoUrl || detailed.logoUrl,
-              badges: {
-                ...detailed.badges,
-                ...prev.badges,
-                platform: prev.badges?.platform || detailed.badges?.platform,
-                platformName: prev.badges?.platformName || detailed.badges?.platformName,
-                isTop10: prev.badges?.isTop10 ?? detailed.badges?.isTop10,
-                // Clear "Chưa có sẵn" ribbon if we actually have playable episodes
-                ribbon: (hasEpisodes && prev.badges?.ribbon === 'Chưa có sẵn')
-                  ? undefined
-                  : (prev.badges?.ribbon || detailed.badges?.ribbon),
-                subBadge: (hasEpisodes && (prev.badges?.subBadge === 'Trailer' || prev.badges?.subBadge === 'Sắp chiếu'))
-                  ? (prev.badges?.platformName || 'Phát hành')
-                  : (prev.badges?.subBadge || detailed.badges?.subBadge),
-              },
-              progress: prev.progress,
-            };
+      // Stage 3: Dynamic title search if no stream/episodes were found
+      if (!detailed && (!movie.episodesServers || movie.episodesServers.length === 0)) {
+        try {
+          const match = await findNguonCMatch(movie.title, movie.subTitle, {
+            year: movie.year,
+            type: movie.type,
+            tmdbId: resolvedTmdbId,
           });
+          if (match?.slug && match.slug !== targetSlug) {
+            targetSlug = match.slug;
+            detailed = await getMovieDetail(targetSlug);
+          }
+        } catch (err) {
+          console.warn('Fallback movie lookup error:', err);
         }
-      } catch (err) {
-        console.error('Failed to load movie detail:', err);
-      } finally {
-        setIsLoadingDetail(false);
       }
-    } else {
+
+      // If detailed movie data was retrieved, merge with high-fidelity UI properties
+      if (detailed) {
+        const foundDetail = detailed;
+        setSelectedMovie((prev) => {
+          if (!prev) return foundDetail;
+
+          const hasEpisodes = Boolean(foundDetail.episodesServers && foundDetail.episodesServers.length > 0);
+
+          return {
+            ...foundDetail,
+            ...prev, // Prev preserves high-fidelity title, posters, synopsis, logoUrl, year, rating
+            slug: targetSlug || foundDetail.slug || prev.slug,
+            embedUrl: foundDetail.embedUrl || prev.embedUrl,
+            m3u8Url: foundDetail.m3u8Url || prev.m3u8Url,
+            episodesServers: hasEpisodes ? foundDetail.episodesServers : prev.episodesServers,
+            currentEpisode: foundDetail.currentEpisode || prev.currentEpisode,
+            seasons: foundDetail.seasons || prev.seasons,
+            duration: foundDetail.duration || prev.duration,
+            durationMinutes: foundDetail.durationMinutes || prev.durationMinutes,
+            isAvailable: hasEpisodes ? true : (prev.isAvailable ?? foundDetail.isAvailable),
+            genres:
+              foundDetail.genres && foundDetail.genres.length > 0 && foundDetail.genres[0] !== 'Phim hot'
+                ? foundDetail.genres
+                : prev.genres || foundDetail.genres,
+            logoUrl: prev.logoUrl || foundDetail.logoUrl,
+            badges: {
+              ...foundDetail.badges,
+              ...prev.badges,
+              platform: prev.badges?.platform || foundDetail.badges?.platform,
+              platformName: prev.badges?.platformName || foundDetail.badges?.platformName,
+              isTop10: prev.badges?.isTop10 ?? foundDetail.badges?.isTop10,
+              // Clear "Chưa có sẵn" ribbon if we actually have playable episodes
+              ribbon: (hasEpisodes && prev.badges?.ribbon === 'Chưa có sẵn')
+                ? undefined
+                : (prev.badges?.ribbon || foundDetail.badges?.ribbon),
+              subBadge: (hasEpisodes && (prev.badges?.subBadge === 'Trailer' || prev.badges?.subBadge === 'Sắp chiếu'))
+                ? (prev.badges?.platformName || 'Phát hành')
+                : (prev.badges?.subBadge || foundDetail.badges?.subBadge),
+            },
+            progress: prev.progress,
+          };
+        });
+      }
+    } catch (err) {
+      console.warn('Modal movie detail resolution error:', err);
+    } finally {
       setIsLoadingDetail(false);
     }
   }, []);
@@ -304,7 +368,12 @@ export const NetflixProvider: React.FC<{ children: React.ReactNode }> = ({ child
   }, []);
 
   const startPlaying = useCallback(
-    async (movie: Movie, episodeEmbedUrl?: string, episodeTitle?: string) => {
+    async (
+      movie: Movie,
+      episodeEmbedUrl?: string,
+      episodeTitle?: string,
+      episodeM3u8Url?: string
+    ) => {
       if (!movie) return;
 
       const key = movie.slug || movie.id;
@@ -313,10 +382,46 @@ export const NetflixProvider: React.FC<{ children: React.ReactNode }> = ({ child
       // 1. If an episode was explicitly passed OR previously watched, resume that episode
       let targetEmbed = episodeEmbedUrl || wp?.episodeEmbed || movie.embedUrl || null;
       let targetTitle = episodeTitle || wp?.episodeTitle || movie.currentEpisode || null;
+      let targetM3u8 = episodeM3u8Url || wp?.episodeM3u8 || movie.m3u8Url || null;
+
+      if (targetTitle) {
+        targetTitle = formatEpisodeTitle(targetTitle);
+      }
+
+      // If targetM3u8 is not directly provided, search within movie.episodesServers or movie.seasonsList
+      if (!targetM3u8 && movie.episodesServers) {
+        for (const srv of movie.episodesServers) {
+          const found = srv.items?.find(
+            (ep) =>
+              ep.embed === targetEmbed ||
+              formatEpisodeTitle(ep.name) === targetTitle ||
+              ep.name === targetTitle
+          );
+          if (found?.m3u8) {
+            targetM3u8 = found.m3u8;
+            break;
+          }
+        }
+      }
+      if (!targetM3u8 && movie.seasonsList) {
+        for (const s of movie.seasonsList) {
+          const found = s.episodes?.find(
+            (ep) =>
+              ep.embedUrl === targetEmbed ||
+              formatEpisodeTitle(ep.title) === targetTitle ||
+              ep.title === targetTitle
+          );
+          if (found?.m3u8Url) {
+            targetM3u8 = found.m3u8Url;
+            break;
+          }
+        }
+      }
 
       setPlayingMovie(movie);
       setCurrentEpisodeEmbed(targetEmbed);
       setCurrentEpisodeTitle(targetTitle);
+      setCurrentEpisodeM3u8(targetM3u8);
 
       // Resolve slug dynamically if missing
       let activeSlug = movie.slug;
@@ -332,9 +437,9 @@ export const NetflixProvider: React.FC<{ children: React.ReactNode }> = ({ child
         } catch {}
       }
 
-      // 2. If movie has not been watched yet (or missing embed) and has slug:
-      // Fetch full detail to start from Episode 1 (Tập 1)
-      if (!targetEmbed && activeSlug) {
+      // 2. If movie has not been watched yet or missing m3u8/embed, and has slug:
+      // Fetch full detail to resolve accurate stream URLs
+      if ((!targetEmbed || !targetM3u8) && activeSlug) {
         try {
           setIsLoadingDetail(true);
           const detailed = await getMovieDetail(activeSlug);
@@ -348,22 +453,40 @@ export const NetflixProvider: React.FC<{ children: React.ReactNode }> = ({ child
                   slug: activeSlug || prev.slug,
                   episodesServers: detailed.episodesServers || prev.episodesServers,
                   embedUrl: detailed.embedUrl || prev.embedUrl,
+                  m3u8Url: detailed.m3u8Url || prev.m3u8Url,
                 };
               }
               return prev;
             });
 
+            // Find matching episode in detailed
+            let resolvedEp: any = null;
+            if (detailed.episodesServers) {
+              for (const srv of detailed.episodesServers) {
+                const found = srv.items?.find(
+                  (ep) =>
+                    (targetEmbed && ep.embed === targetEmbed) ||
+                    (targetTitle && formatEpisodeTitle(ep.name) === targetTitle) ||
+                    (targetTitle && ep.name === targetTitle)
+                );
+                if (found) {
+                  resolvedEp = found;
+                  break;
+                }
+              }
+            }
+
             const firstServer = detailed.episodesServers?.[0];
-            const firstEp = firstServer?.items?.[0];
-            const resolvedEmbed = firstEp?.embed || detailed.embedUrl || null;
-            const resolvedTitle = firstEp
-              ? `Tập ${firstEp.name}`
-              : (detailed.currentEpisode || 'Tập 1');
+            const firstEp = resolvedEp || firstServer?.items?.[0];
+            const resolvedEmbed = targetEmbed || firstEp?.embed || detailed.embedUrl || null;
+            const resolvedM3u8 = targetM3u8 || firstEp?.m3u8 || detailed.m3u8Url || null;
+            const resolvedTitle = targetTitle || (firstEp
+              ? formatEpisodeTitle(firstEp.name)
+              : (detailed.currentEpisode ? formatEpisodeTitle(detailed.currentEpisode) : 'Tập 1'));
 
             setCurrentEpisodeEmbed(resolvedEmbed);
-            if (!targetTitle) {
-              setCurrentEpisodeTitle(resolvedTitle);
-            }
+            setCurrentEpisodeM3u8(resolvedM3u8);
+            setCurrentEpisodeTitle(resolvedTitle);
           }
         } catch (err) {
           console.error('Failed to load movie stream for playback:', err);
@@ -379,11 +502,39 @@ export const NetflixProvider: React.FC<{ children: React.ReactNode }> = ({ child
     setPlayingMovie(null);
     setCurrentEpisodeEmbed(null);
     setCurrentEpisodeTitle(null);
+    setCurrentEpisodeM3u8(null);
   }, []);
 
-  const setPlayingEpisode = useCallback((embedUrl: string, title?: string) => {
+  const playingMovieRef = useRef<Movie | null>(null);
+  playingMovieRef.current = playingMovie;
+
+  const setPlayingEpisode = useCallback((embedUrl: string, title?: string, m3u8Url?: string) => {
     setCurrentEpisodeEmbed(embedUrl);
-    if (title) setCurrentEpisodeTitle(title);
+    const cleanedTitle = title ? formatEpisodeTitle(title) : null;
+    if (cleanedTitle) setCurrentEpisodeTitle(cleanedTitle);
+
+    if (m3u8Url !== undefined) {
+      setCurrentEpisodeM3u8(m3u8Url);
+    } else {
+      let foundM3u8: string | null = null;
+      if (playingMovieRef.current?.episodesServers) {
+        for (const srv of playingMovieRef.current.episodesServers) {
+          const match = srv.items?.find(
+            (ep) =>
+              ep.embed === embedUrl ||
+              (cleanedTitle && formatEpisodeTitle(ep.name) === cleanedTitle)
+          );
+          if (match?.m3u8) {
+            foundM3u8 = match.m3u8;
+            break;
+          }
+        }
+      }
+      if (!foundM3u8 && playingMovieRef.current?.m3u8Url) {
+        foundM3u8 = playingMovieRef.current.m3u8Url;
+      }
+      setCurrentEpisodeM3u8(foundM3u8);
+    }
   }, []);
 
   const toggleMyList = useCallback((movie: Movie) => {
@@ -485,16 +636,39 @@ export const NetflixProvider: React.FC<{ children: React.ReactNode }> = ({ child
       currentTime: number,
       duration: number,
       episodeTitle?: string,
-      episodeEmbed?: string
+      episodeEmbed?: string,
+      episodeM3u8?: string
     ) => {
       if (!movie) return;
       const key = movie.slug || movie.id;
       const movieSecs = movie.durationMinutes ? movie.durationMinutes * 60 : 45 * 60;
       const validDuration = duration > 0 && duration !== 45 * 60 ? duration : movieSecs;
       const percent = Math.min(100, Math.max(1, Math.round((currentTime / validDuration) * 100)));
-      const epTitle = episodeTitle || movie.currentEpisode || 'Tập 1';
+      const rawTitle = episodeTitle || movie.currentEpisode || 'Tập 1';
+      const epTitle = formatEpisodeTitle(rawTitle);
       const epMatch = epTitle.match(/\d+/);
       const epNumStr = epMatch ? epMatch[0] : epTitle;
+      const epNumPadded = epMatch ? epMatch[0].padStart(2, '0') : epTitle;
+
+      // Resolve m3u8 if not passed
+      let resolvedM3u8 = episodeM3u8 || null;
+      if (!resolvedM3u8 && movie.episodesServers) {
+        for (const srv of movie.episodesServers) {
+          const match = srv.items?.find(
+            (ep) =>
+              (episodeEmbed && ep.embed === episodeEmbed) ||
+              formatEpisodeTitle(ep.name) === epTitle ||
+              ep.name === epTitle
+          );
+          if (match?.m3u8) {
+            resolvedM3u8 = match.m3u8;
+            break;
+          }
+        }
+      }
+      if (!resolvedM3u8) {
+        resolvedM3u8 = movie.m3u8Url || null;
+      }
 
       const activeUser = currentUserRef.current;
       const userStorageKey = activeUser?.username
@@ -505,22 +679,24 @@ export const NetflixProvider: React.FC<{ children: React.ReactNode }> = ({ child
         const existing = prev[key];
         const existingEpisodes = existing?.episodesProgress || {};
 
+        const epData: EpisodeProgress = {
+          currentTime: Math.round(currentTime),
+          duration: Math.round(validDuration),
+          progressPercent: percent,
+          updatedAt: Date.now(),
+          isCompleted: percent >= 90,
+          embedUrl: episodeEmbed || existing?.episodeEmbed || movie.embedUrl,
+          m3u8Url: resolvedM3u8 || existing?.episodeM3u8 || movie.m3u8Url,
+        };
+
         const updatedEpisodes: Record<string, EpisodeProgress> = {
           ...existingEpisodes,
-          [epTitle]: {
-            currentTime: Math.round(currentTime),
-            duration: Math.round(validDuration),
-            progressPercent: percent,
-            updatedAt: Date.now(),
-            isCompleted: percent >= 90,
-          },
-          [epNumStr]: {
-            currentTime: Math.round(currentTime),
-            duration: Math.round(validDuration),
-            progressPercent: percent,
-            updatedAt: Date.now(),
-            isCompleted: percent >= 90,
-          },
+          [epTitle]: epData,
+          [rawTitle]: epData,
+          [epNumStr]: epData,
+          [epNumPadded]: epData,
+          [`Tập ${epNumStr}`]: epData,
+          [`Tập ${epNumPadded}`]: epData,
         };
 
         const progressItem: WatchProgress = {
@@ -528,7 +704,8 @@ export const NetflixProvider: React.FC<{ children: React.ReactNode }> = ({ child
           movieSlug: movie.slug,
           movie,
           episodeTitle: epTitle,
-          episodeEmbed: episodeEmbed || movie.embedUrl,
+          episodeEmbed: episodeEmbed || existing?.episodeEmbed || movie.embedUrl,
+          episodeM3u8: resolvedM3u8 || existing?.episodeM3u8 || movie.m3u8Url,
           currentTime: Math.round(currentTime),
           duration: Math.round(validDuration),
           progressPercent: percent,
@@ -577,18 +754,37 @@ export const NetflixProvider: React.FC<{ children: React.ReactNode }> = ({ child
       if (!wp) return undefined;
 
       const normKey = episodeNameOrNumber.toString().trim();
+      const formattedTitle = formatEpisodeTitle(normKey);
       const match = normKey.match(/\d+/);
       const num = match ? parseInt(match[0], 10) : null;
+      const numStr = match ? match[0] : null;
+      const numPadded = match ? match[0].padStart(2, '0') : null;
 
       // 1. Direct match in episodesProgress
       if (wp.episodesProgress) {
+        if (wp.episodesProgress[formattedTitle]) return wp.episodesProgress[formattedTitle];
         if (wp.episodesProgress[normKey]) return wp.episodesProgress[normKey];
-        if (num !== null && wp.episodesProgress[num.toString()]) return wp.episodesProgress[num.toString()];
-        if (wp.episodesProgress[`Tập ${normKey}`]) return wp.episodesProgress[`Tập ${normKey}`];
+        if (numStr && wp.episodesProgress[numStr]) return wp.episodesProgress[numStr];
+        if (numPadded && wp.episodesProgress[numPadded]) return wp.episodesProgress[numPadded];
+        if (numStr && wp.episodesProgress[`Tập ${numStr}`]) return wp.episodesProgress[`Tập ${numStr}`];
+        if (numPadded && wp.episodesProgress[`Tập ${numPadded}`]) return wp.episodesProgress[`Tập ${numPadded}`];
       }
 
       // 2. Match against current in-progress episode
       if (wp.episodeTitle) {
+        const wpTitleFormatted = formatEpisodeTitle(wp.episodeTitle);
+        if (wpTitleFormatted === formattedTitle) {
+          return {
+            currentTime: wp.currentTime,
+            duration: wp.duration,
+            progressPercent: wp.progressPercent,
+            updatedAt: wp.updatedAt,
+            isCompleted: wp.progressPercent >= 90,
+            embedUrl: wp.episodeEmbed,
+            m3u8Url: wp.episodeM3u8,
+          };
+        }
+
         const wpMatch = wp.episodeTitle.match(/\d+/);
         const wpNum = wpMatch ? parseInt(wpMatch[0], 10) : null;
 
@@ -600,6 +796,8 @@ export const NetflixProvider: React.FC<{ children: React.ReactNode }> = ({ child
               progressPercent: wp.progressPercent,
               updatedAt: wp.updatedAt,
               isCompleted: wp.progressPercent >= 90,
+              embedUrl: wp.episodeEmbed,
+              m3u8Url: wp.episodeM3u8,
             };
           } else if (num < wpNum) {
             // Previous episode already completed
@@ -645,7 +843,6 @@ export const NetflixProvider: React.FC<{ children: React.ReactNode }> = ({ child
     }
   }, []);
 
-
   // Derive continueWatchingList
   const continueWatchingList = Object.values(watchProgressMap)
     .filter((wp) => wp && wp.movie && (wp.progressPercent || 0) < 95)
@@ -653,8 +850,9 @@ export const NetflixProvider: React.FC<{ children: React.ReactNode }> = ({ child
     .map((wp) => ({
       ...wp.movie,
       progress: wp.progressPercent,
-      currentEpisode: wp.episodeTitle || wp.movie?.currentEpisode,
+      currentEpisode: wp.episodeTitle ? formatEpisodeTitle(wp.episodeTitle) : (wp.movie?.currentEpisode ? formatEpisodeTitle(wp.movie.currentEpisode) : undefined),
       embedUrl: wp.episodeEmbed || wp.movie?.embedUrl,
+      m3u8Url: wp.episodeM3u8 || wp.movie?.m3u8Url,
     }));
 
   // Hover Popout Coordination State & Timers
@@ -813,6 +1011,22 @@ export const NetflixProvider: React.FC<{ children: React.ReactNode }> = ({ child
     };
   }, [closeHoverPopoutNow, clearHoverTimers]);
 
+  const setTrailerVolume = useCallback((val: number) => {
+    const clamped = Math.min(100, Math.max(0, Math.round(val)));
+    setTrailerVolumeState(clamped);
+    if (clamped === 0) {
+      setIsMuted(true);
+    } else {
+      setIsMuted(false);
+    }
+    try {
+      const user = currentUserRef.current?.username;
+      const storageKey = user ? `netflix_trailer_volume_${user}` : 'netflix_trailer_volume_guest';
+      localStorage.setItem(storageKey, String(clamped));
+      localStorage.setItem('netflix_trailer_volume', String(clamped));
+    } catch {}
+  }, []);
+
   const toggleMute = useCallback(() => {
     setIsMuted((prev) => {
       const next = !prev;
@@ -822,9 +1036,13 @@ export const NetflixProvider: React.FC<{ children: React.ReactNode }> = ({ child
         localStorage.setItem(storageKey, String(next));
         localStorage.setItem('netflix_muted_pref', String(next));
       } catch {}
+      // If unmuting when volume was 0, restore to default 60%
+      if (!next && trailerVolumeRef.current === 0) {
+        setTrailerVolume(60);
+      }
       return next;
     });
-  }, []);
+  }, [setTrailerVolume]);
 
   return (
     <NetflixContext.Provider
@@ -839,9 +1057,12 @@ export const NetflixProvider: React.FC<{ children: React.ReactNode }> = ({ child
         playingMovie,
         currentEpisodeEmbed,
         currentEpisodeTitle,
+        currentEpisodeM3u8,
         myList,
         searchQuery,
         isMuted,
+        trailerVolume,
+        setTrailerVolume,
         isLoadingDetail,
         watchProgressMap,
         continueWatchingList,

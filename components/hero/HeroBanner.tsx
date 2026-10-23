@@ -5,6 +5,7 @@ import { Play, Info, Volume2, VolumeX, Sparkles, CheckCircle2 } from 'lucide-rea
 import { NetflixRibbonN } from '@/components/ui/NetflixLogo';
 import { useNetflix } from '@/context/NetflixContext';
 import { Movie } from '@/types';
+import { formatEpisodeTitle } from '@/services/movieApi';
 
 interface HeroBannerProps {
   movie?: Movie | null;
@@ -17,6 +18,8 @@ export const HeroBanner: React.FC<HeroBannerProps> = ({ movie, badgeText }) => {
     startPlaying,
     isMuted,
     toggleMute,
+    trailerVolume,
+    setTrailerVolume,
     selectedMovie,
     playingMovie,
     getWatchProgress,
@@ -43,6 +46,8 @@ export const HeroBanner: React.FC<HeroBannerProps> = ({ movie, badgeText }) => {
   const isInViewRef = useRef(isInView);
   const isModalOpenRef = useRef(isModalOpen);
   const isMutedRef = useRef(isMuted);
+  const trailerVolumeRef = useRef(trailerVolume);
+  trailerVolumeRef.current = trailerVolume;
   const isCardTrailerPlayingRef = useRef(isCardTrailerPlaying);
 
   const fadeTimerRef = useRef<NodeJS.Timeout | null>(null);
@@ -118,7 +123,7 @@ export const HeroBanner: React.FC<HeroBannerProps> = ({ movie, badgeText }) => {
     isFadingRef.current = true;
     const steps = 11;
     const intervalMs = Math.max(20, Math.floor(durationMs / steps)); // ~50ms
-    let currentVol = currentVolumeRef.current > 0 ? currentVolumeRef.current : 100;
+    let currentVol = currentVolumeRef.current > 0 ? currentVolumeRef.current : trailerVolumeRef.current;
     const stepDec = currentVol / steps;
 
     fadeTimerRef.current = setInterval(() => {
@@ -166,7 +171,7 @@ export const HeroBanner: React.FC<HeroBannerProps> = ({ movie, badgeText }) => {
     const steps = 10;
     const intervalMs = Math.max(20, Math.floor(durationMs / steps)); // ~45ms
     let currentVol = 0;
-    const targetVol = 100;
+    const targetVol = trailerVolumeRef.current;
     const stepInc = targetVol / steps;
 
     fadeTimerRef.current = setInterval(() => {
@@ -180,7 +185,7 @@ export const HeroBanner: React.FC<HeroBannerProps> = ({ movie, badgeText }) => {
           fadeTimerRef.current = null;
         }
         isFadingRef.current = false;
-        sendIframeCommand('setVolume', 100);
+        sendIframeCommand('setVolume', targetVol);
       }
     }, intervalMs);
   }, [sendIframeCommand]);
@@ -239,8 +244,11 @@ export const HeroBanner: React.FC<HeroBannerProps> = ({ movie, badgeText }) => {
       // ignore
     }
 
-    if (cachedKey && cachedKey !== 'none') {
-      setTrailerKey(cachedKey);
+    const immediateKey =
+      movie.trailerYoutubeKey || (cachedKey && cachedKey !== 'none' ? cachedKey : null);
+
+    if (immediateKey) {
+      setTrailerKey(immediateKey);
       trailerTimerRef.current = setTimeout(() => {
         if (!isCancelled) {
           setIsTrailerPlaying(true);
@@ -253,9 +261,10 @@ export const HeroBanner: React.FC<HeroBannerProps> = ({ movie, badgeText }) => {
       const qYear = encodeURIComponent(movie.year ? String(movie.year) : '');
       const qTmdbId = encodeURIComponent(movie.tmdb?.id ? String(movie.tmdb.id) : '');
       const qMediaType = encodeURIComponent(movie.tmdb?.type || '');
+      const qTrailerUrl = encodeURIComponent(movie.trailerUrl || '');
 
       fetch(
-        `/api/trailer?title=${qTitle}&subTitle=${qSub}&slug=${qSlug}&year=${qYear}&tmdbId=${qTmdbId}&mediaType=${qMediaType}`
+        `/api/trailer?title=${qTitle}&subTitle=${qSub}&slug=${qSlug}&year=${qYear}&tmdbId=${qTmdbId}&mediaType=${qMediaType}&trailerUrl=${qTrailerUrl}`
       )
         .then((res) => res.json())
         .then((data) => {
@@ -371,7 +380,7 @@ export const HeroBanner: React.FC<HeroBannerProps> = ({ movie, badgeText }) => {
             sendIframeCommand('playVideo');
             if (!isMutedRef.current) {
               sendIframeCommand('unMute');
-              sendIframeCommand('setVolume', 100);
+              sendIframeCommand('setVolume', trailerVolumeRef.current);
             }
           }
         }
@@ -559,19 +568,19 @@ export const HeroBanner: React.FC<HeroBannerProps> = ({ movie, badgeText }) => {
     }
   }, [isInView, isModalOpen, isTabVisible, isWindowFocused, isTrailerPlaying, trailerKey, isMuted, isCardTrailerPlaying, sendIframeCommand]);
 
-  // Sync mute / unmute state with YouTube iframe via postMessage
+  // Sync mute / unmute and volume state with YouTube iframe via postMessage
   useEffect(() => {
     if (iframeRef.current && isTrailerPlaying && trailerKey) {
       const isAppActive = isTabVisible && isWindowFocused;
       if (isAppActive && !isModalOpen && !isCardTrailerPlaying) {
         sendIframeCommand(isMuted ? 'mute' : 'unMute');
         if (!isMuted) {
-          currentVolumeRef.current = 100;
-          sendIframeCommand('setVolume', 100);
+          currentVolumeRef.current = trailerVolume;
+          sendIframeCommand('setVolume', trailerVolume);
         }
       }
     }
-  }, [isMuted, isTrailerPlaying, trailerKey, isTabVisible, isWindowFocused, isModalOpen, isCardTrailerPlaying, sendIframeCommand]);
+  }, [isMuted, trailerVolume, isTrailerPlaying, trailerKey, isTabVisible, isWindowFocused, isModalOpen, isCardTrailerPlaying, sendIframeCommand]);
 
   if (!movie) {
     return (
@@ -721,8 +730,8 @@ export const HeroBanner: React.FC<HeroBannerProps> = ({ movie, badgeText }) => {
 
                       if (!isMuted) {
                         sendIframeCommand('unMute');
-                        sendIframeCommand('setVolume', 100);
-                        currentVolumeRef.current = 100;
+                        sendIframeCommand('setVolume', trailerVolume);
+                        currentVolumeRef.current = trailerVolume;
                       } else {
                         sendIframeCommand('mute');
                         sendIframeCommand('setVolume', 0);
@@ -761,15 +770,42 @@ export const HeroBanner: React.FC<HeroBannerProps> = ({ movie, badgeText }) => {
             )}
           </div>
 
-          {/* Top-Right Mute / Audio Toggle */}
+          {/* Top-Right Mute / Audio Toggle & Liquid Glass Volume Slider */}
           <div className="absolute top-6 right-6 md:top-8 md:right-10 z-10">
-            <button
-              onClick={toggleMute}
-              aria-label={isMuted ? 'Bật âm thanh' : 'Tắt âm thanh'}
-              className="w-10 h-10 rounded-full border border-white/40 bg-black/40 backdrop-blur-md flex items-center justify-center text-white hover:bg-black/70 hover:border-white transition-all duration-200 cursor-pointer shadow-lg active:scale-95"
-            >
-              {isMuted ? <VolumeX className="w-5 h-5" /> : <Volume2 className="w-5 h-5 text-white" />}
-            </button>
+            <div className="relative group/vol flex items-center">
+              <div className="flex items-center gap-2.5 h-10 px-2 rounded-full border border-white/35 bg-black/45 hover:bg-black/65 backdrop-blur-xl shadow-[inset_0_1px_1px_rgba(255,255,255,0.3),0_8px_24px_rgba(0,0,0,0.5)] transition-all duration-300">
+                <button
+                  onClick={toggleMute}
+                  aria-label={isMuted ? 'Bật âm thanh' : 'Tắt âm thanh'}
+                  className="w-7 h-7 rounded-full flex items-center justify-center text-white hover:text-red-400 transition cursor-pointer shrink-0"
+                >
+                  {isMuted || trailerVolume === 0 ? (
+                    <VolumeX className="w-5 h-5 text-red-400" />
+                  ) : (
+                    <Volume2 className="w-5 h-5 text-white" />
+                  )}
+                </button>
+
+                <div className="w-0 group-hover/vol:w-28 sm:group-hover/vol:w-32 opacity-0 group-hover/vol:opacity-100 overflow-hidden transition-all duration-300 ease-out flex items-center gap-2">
+                  <input
+                    type="range"
+                    min={0}
+                    max={100}
+                    step={1}
+                    value={isMuted ? 0 : trailerVolume}
+                    onChange={(e) => {
+                      const val = Number(e.target.value);
+                      setTrailerVolume(val);
+                    }}
+                    className="w-16 sm:w-20 h-1.5 bg-white/20 hover:bg-white/35 accent-red-600 rounded-lg cursor-pointer transition-all"
+                    aria-label="Âm lượng trailer"
+                  />
+                  <span className="text-[11px] font-bold text-zinc-300 tabular-nums select-none shrink-0 drop-shadow pr-1">
+                    {isMuted ? '0%' : `${trailerVolume}%`}
+                  </span>
+                </div>
+              </div>
+            </div>
           </div>
 
           {/* Hero Content Left Block - Minimalist Netflix Layout to showcase trailer */}
@@ -854,8 +890,13 @@ export const HeroBanner: React.FC<HeroBannerProps> = ({ movie, badgeText }) => {
                 return (
                   <button
                     onClick={() => {
-                      if (watchProgress?.episodeEmbed) {
-                        startPlaying(movie, watchProgress.episodeEmbed, watchProgress.episodeTitle);
+                      if (watchProgress?.episodeEmbed || watchProgress?.episodeM3u8) {
+                        startPlaying(
+                          movie,
+                          watchProgress.episodeEmbed,
+                          formatEpisodeTitle(watchProgress.episodeTitle),
+                          watchProgress.episodeM3u8
+                        );
                       } else {
                         startPlaying(movie);
                       }
@@ -865,7 +906,7 @@ export const HeroBanner: React.FC<HeroBannerProps> = ({ movie, badgeText }) => {
                     <Play className="w-5 h-5 fill-black ml-0.5" />
                     <span>
                       {watchProgress?.episodeTitle
-                        ? `Tiếp tục xem • ${watchProgress.episodeTitle}`
+                        ? `Tiếp tục xem • ${formatEpisodeTitle(watchProgress.episodeTitle)}`
                         : 'Phát'}
                     </span>
                   </button>

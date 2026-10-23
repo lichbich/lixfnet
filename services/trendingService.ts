@@ -3,7 +3,8 @@ import { fetchTMDBLogo } from '@/services/logoService';
 
 const TMDB_API_KEY =
   process.env.TMDB_API_KEY || '58dba4066f4f36e49e5e769304442088';
-const NGUONC_API_BASE = 'https://phim.nguonc.com/api';
+export const KKPHIM_API_BASE = 'https://phimapi.com';
+export const NGUONC_API_BASE = KKPHIM_API_BASE;
 
 // In-memory cache to prevent redundant external queries
 interface CacheEntry<T> {
@@ -144,7 +145,7 @@ export const NETFLIX_VN_TUDUM_DICTIONARY: Record<
   'Ben-Hur': {
     vietnameseTitle: 'Ben-Hur',
     originalTitle: 'Ben-Hur',
-    slug: 'ben-hur',
+    slug: 'hoang-tu-benhur',
     tmdbId: 271969,
     year: 2016,
     type: 'movie',
@@ -320,14 +321,8 @@ export const STREAMING_PLATFORM_DICTIONARY: Record<
     type: 'series',
   },
   'black bird': {
-    vietnameseTitle: 'Hắc Điểu',
-    slug: 'hac-dieu',
-    type: 'series',
-  },
-  'defending jacob': {
-    vietnameseTitle: 'Bảo Vệ Jacob',
-    slug: 'bao-ve-jacob',
-    year: 2020,
+    vietnameseTitle: 'Hắc Điểu (Phần 1)',
+    slug: 'hac-dieu-phan-1',
     type: 'series',
   },
   'see': {
@@ -363,8 +358,8 @@ export const STREAMING_PLATFORM_DICTIONARY: Record<
     type: 'series',
   },
   'chernobyl': {
-    vietnameseTitle: 'Thảm Họa Hạt Nhân Chernobyl',
-    slug: 'tham-hoa-hat-nhan-chernobyl',
+    vietnameseTitle: 'Thảm Họa Chernobyl',
+    slug: 'tham-hoa-chernobyl',
     year: 2021,
     type: 'series',
   },
@@ -380,15 +375,9 @@ export const STREAMING_PLATFORM_DICTIONARY: Record<
     year: 2014,
     type: 'series',
   },
-  'succession': {
-    vietnameseTitle: 'Kẻ Kế Vị (Phần 1)',
-    slug: 'ke-ke-vi-phan-1',
-    year: 2018,
-    type: 'series',
-  },
   'euphoria': {
-    vietnameseTitle: 'Sự Phấn Khích (Phần 1)',
-    slug: 'su-phan-khich-phan-1',
+    vietnameseTitle: 'Lâng Lâng (Phê Pha) (Phần 1)',
+    slug: 'lang-lang-phe-pha-phan-1',
     year: 2019,
     type: 'series',
   },
@@ -445,14 +434,18 @@ function normalizeSearchText(str?: string): string {
  * Year discrepancy >= 3 years results in an immediate rejection (-100).
  */
 function scoreCandidate(
-  target: { title: string; originalTitle?: string; year?: number; type?: 'movie' | 'series' },
+  target: { title: string; originalTitle?: string; year?: number; type?: 'movie' | 'series'; tmdbId?: number | string },
   cand: any
 ): number {
+  // Exact TMDB ID Match: 100% Guaranteed hit
+  if (target.tmdbId && cand.tmdb?.id && String(target.tmdbId) === String(cand.tmdb.id)) {
+    return 500;
+  }
+
   const tYear = target.year || 0;
   const cYear = typeof cand.year === 'number' ? cand.year : parseInt(cand.year || '0', 10);
 
   // 1. Year check: >= 3 years difference is an immediate rejection!
-  // (Prevents 1982 horror film "Đèn Lồng Da Người" from matching 2026 DC series "Lanterns")
   if (tYear && cYear) {
     const diff = Math.abs(tYear - cYear);
     if (diff >= 3) return -100;
@@ -469,9 +462,15 @@ function scoreCandidate(
   }
 
   // Type check (Movie vs Series)
+  const candType = String(cand.type || '').toLowerCase();
+  const cEpTotal = String(cand.episode_total || '').toLowerCase();
+  const cEpCur = String(cand.episode_current || cand.current_episode || '').toLowerCase();
   const candIsSeries = Boolean(
+    candType === 'series' ||
+    candType === 'tvshows' ||
+    (cEpTotal && !cEpTotal.includes('1 tập') && !cEpTotal.includes('full') && cEpTotal !== '1') ||
     (cand.total_episodes && cand.total_episodes > 1) ||
-    (cand.current_episode && !cand.current_episode.toLowerCase().includes('full')) ||
+    (cEpCur && !cEpCur.includes('full') && cEpCur.includes('tập')) ||
     (cand.slug && (cand.slug.includes('phan-') || cand.slug.includes('tap-'))) ||
     (cand.name && (cand.name.toLowerCase().includes('phần') || cand.name.toLowerCase().includes('tập')))
   );
@@ -487,7 +486,7 @@ function scoreCandidate(
   const normTargetTitle = normalizeSearchText(target.title);
   const normTargetOrig = normalizeSearchText(target.originalTitle);
   const normCandName = normalizeSearchText(cand.name);
-  const normCandOrig = normalizeSearchText(cand.original_name);
+  const normCandOrig = normalizeSearchText(cand.origin_name || cand.original_name);
   const normCandSlug = normalizeSearchText((cand.slug || '').replace(/-/g, ' '));
 
   // Match original title
@@ -525,13 +524,13 @@ function scoreCandidate(
 }
 
 /**
- * Searches NguonC by keyword candidates with strict cross-validation.
+ * Searches KKPhim by TMDB ID or keyword candidates with strict cross-validation.
  * Returns only high-confidence matching items (score >= 60).
  */
 export async function findNguonCMatch(
   title: string,
   originalTitle?: string,
-  extra?: { year?: number; type?: 'movie' | 'series' }
+  extra?: { year?: number; type?: 'movie' | 'series'; tmdbId?: number | string }
 ): Promise<{ slug?: string; embedUrl?: string; name?: string; original_name?: string } | null> {
   const clean = (s: string) =>
     (s || '')
@@ -540,13 +539,37 @@ export async function findNguonCMatch(
       .replace(/\s+/g, ' ')
       .trim();
 
-  const cacheKey = `${clean(title)}__${clean(originalTitle || '')}__${extra?.year || ''}__${extra?.type || ''}`;
+  const cacheKey = `${clean(title)}__${clean(originalTitle || '')}__${extra?.year || ''}__${extra?.type || ''}__${extra?.tmdbId || ''}`;
   const cached = matchCache.get(cacheKey);
   if (cached && Date.now() - cached.timestamp < 24 * 3600 * 1000) {
     return cached.result;
   }
 
-  // 1. Instant check in STREAMING_PLATFORM_DICTIONARY for iconic platform shows (0ms network cost)
+  // 1. Direct TMDB ID lookup on KKPhim API (0ms text mismatch, 100% precision)
+  if (extra?.tmdbId) {
+    const mediaType = extra.type === 'series' ? 'tv' : 'movie';
+    try {
+      const tmdbRes = await nguonCQueue.run(async () =>
+        fetch(`${KKPHIM_API_BASE}/tmdb/${mediaType}/${extra.tmdbId}`, {
+          next: { revalidate: 3600 },
+        })
+      );
+      if (tmdbRes.ok) {
+        const tmdbData = await tmdbRes.json();
+        if (tmdbData.status === true && tmdbData.movie?.slug) {
+          const match = {
+            slug: tmdbData.movie.slug,
+            name: tmdbData.movie.name,
+            original_name: tmdbData.movie.origin_name || tmdbData.movie.original_name || originalTitle,
+          };
+          matchCache.set(cacheKey, { result: match, timestamp: Date.now() });
+          return match;
+        }
+      }
+    } catch {}
+  }
+
+  // 2. Instant check in STREAMING_PLATFORM_DICTIONARY for iconic platform shows (0ms network cost)
   const normTitle = normalizeSearchText(title);
   const normOrig = normalizeSearchText(originalTitle);
 
@@ -593,6 +616,7 @@ export async function findNguonCMatch(
     originalTitle,
     year: extra?.year,
     type: extra?.type,
+    tmdbId: extra?.tmdbId,
   };
 
   let bestCandidate: any = null;
@@ -601,12 +625,12 @@ export async function findNguonCMatch(
   for (const q of uniqueQueries) {
     try {
       const items = await nguonCQueue.run(async () => {
-        const res = await fetch(`${NGUONC_API_BASE}/films/search?keyword=${encodeURIComponent(q)}`, {
+        const res = await fetch(`${KKPHIM_API_BASE}/v1/api/tim-kiem?keyword=${encodeURIComponent(q)}&limit=15`, {
           next: { revalidate: 3600 },
         });
         if (!res.ok) return [];
         const data = await res.json();
-        return data.items || [];
+        return data.data?.items || data.items || [];
       });
 
       for (const item of items) {
@@ -631,7 +655,7 @@ export async function findNguonCMatch(
     finalResult = {
       slug: bestCandidate.slug,
       name: bestCandidate.name,
-      original_name: bestCandidate.original_name,
+      original_name: bestCandidate.origin_name || bestCandidate.original_name,
     };
   }
 
@@ -689,6 +713,7 @@ async function tmdbItemToMovie(
     const match = await findNguonCMatch(title, subTitle, {
       year: parsedYear,
       type: mediaType,
+      tmdbId: item.id,
     });
     matchSlug = match?.slug;
   }
@@ -772,7 +797,7 @@ export async function getNetflixTop10VN(): Promise<{ series: Movie[]; films: Mov
   try {
     const apiUrl = typeof window !== 'undefined' ? '/api/netflix-top10' : 'http://localhost:3000/api/netflix-top10';
     const res = await fetch(apiUrl, { cache: 'no-store' });
-    if (!res.ok) throw new Error(`API status ${res.status}`);
+    if (!res.ok) return { series: [], films: [] };
     const data = await res.json();
 
     const filmsRaw: string[] = data.films || [];
@@ -889,6 +914,7 @@ export async function getNetflixTop10VN(): Promise<{ series: Movie[]; films: Mov
           const match = await findNguonCMatch(searchTitle, dictEntry?.originalTitle || rawTitle, {
             year: targetYear,
             type: mediaType,
+            tmdbId: dictEntry?.tmdbId,
           });
           matchSlug = match?.slug;
         }

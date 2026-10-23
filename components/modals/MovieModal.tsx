@@ -16,19 +16,13 @@ import {
 } from 'lucide-react';
 import { RatingBadge, QualityBadge } from '@/components/ui/Badge';
 import { useNetflix } from '@/context/NetflixContext';
-import { getSimilarMovies } from '@/services/movieApi';
+import { getSimilarMovies, formatEpisodeTitle } from '@/services/movieApi';
 import { getMovieCollection, MovieCollection } from '@/services/collectionService';
 import { clientLogoCache } from '@/services/logoService';
 import { Movie } from '@/types';
 
-/** Cleanly format episode titles, e.g. "4" -> "Tập 4", "Tập 4" -> "Tập 4", "Full" -> "Bản Full" */
-function formatEpisodeLabel(rawName: string): string {
-  const clean = (rawName || '').trim();
-  if (!clean) return 'Tập 1';
-  if (/^tập/i.test(clean)) return clean;
-  if (/^full$/i.test(clean)) return 'Bản Full';
-  return `Tập ${clean}`;
-}
+/** Cleanly format episode titles, e.g. "04" -> "Tập 04", "Tập Tập 04" -> "Tập 04", "Full" -> "Bản Full" */
+const formatEpisodeLabel = formatEpisodeTitle;
 
 export const MovieModal: React.FC = () => {
   const {
@@ -43,6 +37,8 @@ export const MovieModal: React.FC = () => {
     getEpisodeProgress,
     isMuted,
     toggleMute,
+    trailerVolume,
+    setTrailerVolume,
   } = useNetflix();
 
   const [activeServerIndex, setActiveServerIndex] = useState(0);
@@ -163,8 +159,11 @@ export const MovieModal: React.FC = () => {
       // ignore
     }
 
-    if (cachedKey && cachedKey !== 'none') {
-      setTrailerKey(cachedKey);
+    const immediateKey =
+      displayedMovie.trailerYoutubeKey || (cachedKey && cachedKey !== 'none' ? cachedKey : null);
+
+    if (immediateKey) {
+      setTrailerKey(immediateKey);
       startTrailer();
     } else {
       const qTitle = encodeURIComponent(displayedMovie.title || '');
@@ -173,9 +172,10 @@ export const MovieModal: React.FC = () => {
       const qYear = encodeURIComponent(displayedMovie.year ? String(displayedMovie.year) : '');
       const qTmdbId = encodeURIComponent(displayedMovie.tmdb?.id ? String(displayedMovie.tmdb.id) : '');
       const qMediaType = encodeURIComponent(displayedMovie.tmdb?.type || '');
+      const qTrailerUrl = encodeURIComponent(displayedMovie.trailerUrl || '');
 
       fetch(
-        `/api/trailer?title=${qTitle}&subTitle=${qSub}&slug=${qSlug}&year=${qYear}&tmdbId=${qTmdbId}&mediaType=${qMediaType}`
+        `/api/trailer?title=${qTitle}&subTitle=${qSub}&slug=${qSlug}&year=${qYear}&tmdbId=${qTmdbId}&mediaType=${qMediaType}&trailerUrl=${qTrailerUrl}`
       )
         .then((res) => res.json())
         .then((data) => {
@@ -245,7 +245,7 @@ export const MovieModal: React.FC = () => {
     };
   }, [displayedMovie?.id, isOpen]);
 
-  // Sync mute/unmute state with modal trailer iframe
+  // Sync mute/unmute and volume state with modal trailer iframe
   useEffect(() => {
     if (iframeRef.current && isTrailerPlaying && trailerKey) {
       try {
@@ -258,11 +258,16 @@ export const MovieModal: React.FC = () => {
           JSON.stringify({ event: 'command', func: action, args: [] }),
           '*'
         );
+        const targetVol = isMuted ? 0 : trailerVolume;
+        iframeRef.current.contentWindow?.postMessage(
+          JSON.stringify({ event: 'command', func: 'setVolume', args: [targetVol] }),
+          '*'
+        );
       } catch {
         // ignore
       }
     }
-  }, [isMuted, isTrailerPlaying, trailerKey]);
+  }, [isMuted, trailerVolume, isTrailerPlaying, trailerKey]);
 
   // Pause modal trailer when tab is hidden or user switches app, resume on return
   useEffect(() => {
@@ -288,6 +293,10 @@ export const MovieModal: React.FC = () => {
         if (!isMuted) {
           iframeRef.current.contentWindow.postMessage(
             JSON.stringify({ event: 'command', func: 'unMute', args: '' }),
+            '*'
+          );
+          iframeRef.current.contentWindow.postMessage(
+            JSON.stringify({ event: 'command', func: 'setVolume', args: [trailerVolume] }),
             '*'
           );
         }
@@ -316,6 +325,10 @@ export const MovieModal: React.FC = () => {
         if (!isMuted) {
           iframeRef.current.contentWindow.postMessage(
             JSON.stringify({ event: 'command', func: 'unMute', args: '' }),
+            '*'
+          );
+          iframeRef.current.contentWindow.postMessage(
+            JSON.stringify({ event: 'command', func: 'setVolume', args: [trailerVolume] }),
             '*'
           );
         }
@@ -477,9 +490,12 @@ export const MovieModal: React.FC = () => {
     const movieKey = displayedMovie.slug || displayedMovie.id;
     const wp = getWatchProgress(movieKey);
     const currentEpIndex = items.findIndex((ep) => {
+      const epLabel = formatEpisodeLabel(ep.name);
+      const wpLabel = wp?.episodeTitle ? formatEpisodeLabel(wp.episodeTitle) : '';
       return (
         Boolean(wp?.episodeTitle) &&
-        (wp?.episodeTitle === `Tập ${ep.name}` ||
+        (wpLabel === epLabel ||
+          wp?.episodeTitle === `Tập ${ep.name}` ||
           wp?.episodeTitle === ep.name ||
           wp?.episodeTitle?.endsWith(` ${ep.name}`) ||
           wp?.episodeTitle?.includes(`Tập ${ep.name} `))
@@ -573,7 +589,10 @@ export const MovieModal: React.FC = () => {
   const watchingChunkIndex = (() => {
     if (!watchProgress?.episodeTitle || allEpisodes.length === 0) return -1;
     const currentEpIndex = allEpisodes.findIndex((ep) => {
+      const epLabel = formatEpisodeLabel(ep.name);
+      const wpLabel = watchProgress?.episodeTitle ? formatEpisodeLabel(watchProgress.episodeTitle) : '';
       return (
+        wpLabel === epLabel ||
         watchProgress.episodeTitle === `Tập ${ep.name}` ||
         watchProgress.episodeTitle === ep.name ||
         watchProgress.episodeTitle?.endsWith(` ${ep.name}`) ||
@@ -601,13 +620,23 @@ export const MovieModal: React.FC = () => {
     setIsTrailerPlaying(false);
     setIsTrailerReady(false);
     handleClose();
-    if (watchProgress?.episodeEmbed) {
-      startPlaying(movie, watchProgress.episodeEmbed, watchProgress.episodeTitle);
+    if (watchProgress?.episodeEmbed || watchProgress?.episodeM3u8) {
+      startPlaying(
+        movie,
+        watchProgress.episodeEmbed,
+        formatEpisodeLabel(watchProgress.episodeTitle || 'Tập 1'),
+        watchProgress.episodeM3u8
+      );
     } else if (activeServer && activeServer.items.length > 0) {
       const firstEp = activeServer.items[0];
-      startPlaying(movie, firstEp.embed, `Tập ${firstEp.name}`);
-    } else if (movie.embedUrl) {
-      startPlaying(movie, movie.embedUrl, movie.currentEpisode || 'Xem phim');
+      startPlaying(movie, firstEp.embed, formatEpisodeLabel(firstEp.name), firstEp.m3u8);
+    } else if (movie.embedUrl || movie.m3u8Url) {
+      startPlaying(
+        movie,
+        movie.embedUrl,
+        movie.currentEpisode ? formatEpisodeLabel(movie.currentEpisode) : 'Xem phim',
+        movie.m3u8Url
+      );
     } else {
       startPlaying(movie);
     }
@@ -725,7 +754,7 @@ export const MovieModal: React.FC = () => {
                         '*'
                       );
                       iframeRef.current?.contentWindow?.postMessage(
-                        JSON.stringify({ event: 'command', func: 'setVolume', args: [100] }),
+                        JSON.stringify({ event: 'command', func: 'setVolume', args: [trailerVolume] }),
                         '*'
                       );
                     }
@@ -837,21 +866,49 @@ export const MovieModal: React.FC = () => {
                       />
                     </div>
                     <span className="text-xs text-zinc-300 font-semibold whitespace-nowrap">
-                      {watchProgress.episodeTitle || 'Tập 1'} • {Math.round(watchProgress.currentTime / 60)}/{epDurationMinutes}ph
+                      {formatEpisodeLabel(watchProgress.episodeTitle || 'Tập 1')} • {Math.round(watchProgress.currentTime / 60)}/{epDurationMinutes}ph
                     </span>
                   </div>
                 )}
               </div>
             </div>
 
-            {/* Mute button */}
-            <button
-              onClick={toggleMute}
-              aria-label={isMuted ? 'Bật âm thanh' : 'Tắt âm thanh'}
-              className="w-10 h-10 rounded-full border border-white/30 bg-zinc-900/60 hover:bg-zinc-900 text-white flex items-center justify-center transition cursor-pointer active:scale-95 shadow-md"
-            >
-              {isMuted ? <VolumeX className="w-5 h-5" /> : <Volume2 className="w-5 h-5 text-white" />}
-            </button>
+            {/* Interactive Liquid Glass Volume & Mute Controller */}
+            <div className="relative group/vol flex items-center">
+              <div className="flex items-center gap-2.5 h-10 px-2 rounded-full border border-white/30 bg-black/50 hover:bg-black/70 backdrop-blur-xl shadow-[inset_0_1px_1px_rgba(255,255,255,0.3),0_8px_24px_rgba(0,0,0,0.5)] transition-all duration-300">
+                <button
+                  onClick={toggleMute}
+                  aria-label={isMuted ? 'Bật âm thanh' : 'Tắt âm thanh'}
+                  className="w-7 h-7 rounded-full flex items-center justify-center text-white hover:text-red-400 transition cursor-pointer shrink-0"
+                >
+                  {isMuted || trailerVolume === 0 ? (
+                    <VolumeX className="w-5 h-5 text-red-400" />
+                  ) : (
+                    <Volume2 className="w-5 h-5 text-white" />
+                  )}
+                </button>
+
+                {/* Translucent liquid slider expanding horizontally on hover */}
+                <div className="w-0 group-hover/vol:w-28 sm:group-hover/vol:w-32 opacity-0 group-hover/vol:opacity-100 overflow-hidden transition-all duration-300 ease-out flex items-center gap-2">
+                  <input
+                    type="range"
+                    min={0}
+                    max={100}
+                    step={1}
+                    value={isMuted ? 0 : trailerVolume}
+                    onChange={(e) => {
+                      const val = Number(e.target.value);
+                      setTrailerVolume(val);
+                    }}
+                    className="w-16 sm:w-20 h-1.5 bg-white/20 hover:bg-white/35 accent-red-600 rounded-lg cursor-pointer transition-all"
+                    aria-label="Âm lượng trailer"
+                  />
+                  <span className="text-[11px] font-bold text-zinc-300 tabular-nums select-none shrink-0 drop-shadow pr-1">
+                    {isMuted ? '0%' : `${trailerVolume}%`}
+                  </span>
+                </div>
+              </div>
+            </div>
           </div>
         </div>
 
@@ -1133,9 +1190,12 @@ export const MovieModal: React.FC = () => {
               <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-3 sm:gap-3.5">
                 {visibleEpisodes.map((ep) => {
                   const epProg = getEpisodeProgress(movieKey, ep.name);
+                  const epLabel = formatEpisodeLabel(ep.name);
+                  const wpLabel = watchProgress?.episodeTitle ? formatEpisodeLabel(watchProgress.episodeTitle) : '';
                   const isCurrent =
                     Boolean(watchProgress?.episodeTitle) &&
-                    (watchProgress?.episodeTitle === `Tập ${ep.name}` ||
+                    (wpLabel === epLabel ||
+                      watchProgress?.episodeTitle === `Tập ${ep.name}` ||
                       watchProgress?.episodeTitle === ep.name ||
                       watchProgress?.episodeTitle?.endsWith(` ${ep.name}`) ||
                       watchProgress?.episodeTitle?.includes(`Tập ${ep.name} `));
@@ -1147,7 +1207,7 @@ export const MovieModal: React.FC = () => {
                       key={ep.slug}
                       onClick={() => {
                         handleClose();
-                        startPlaying(movie, ep.embed, `Tập ${ep.name}`);
+                        startPlaying(movie, ep.embed, formatEpisodeLabel(ep.name), ep.m3u8);
                       }}
                       className={`relative flex flex-col justify-between p-3.5 rounded-xl transition-all duration-200 text-left group border min-h-[104px] cursor-pointer ${
                         isCurrent
@@ -1281,7 +1341,7 @@ export const MovieModal: React.FC = () => {
                         key={ep.id}
                         onClick={() => {
                           handleClose();
-                          startPlaying(movie, ep.embedUrl, ep.title);
+                          startPlaying(movie, ep.embedUrl, formatEpisodeLabel(ep.title), ep.m3u8Url);
                         }}
                         className="flex flex-col sm:flex-row items-start sm:items-center gap-4 p-3 rounded-lg hover:bg-zinc-800/60 cursor-pointer border-b border-zinc-800/50 transition group"
                       >

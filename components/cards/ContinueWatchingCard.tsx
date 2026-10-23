@@ -5,6 +5,7 @@ import { Play, X } from 'lucide-react';
 import { Movie } from '@/types';
 import { Top10Badge, StatusBadge } from '@/components/ui/Badge';
 import { useNetflix } from '@/context/NetflixContext';
+import { formatEpisodeTitle } from '@/services/movieApi';
 
 interface ContinueWatchingCardProps {
   movie: Movie;
@@ -80,7 +81,12 @@ export const ContinueWatchingCard: React.FC<ContinueWatchingCardProps> = ({
         <button
           onClick={(e) => {
             e.stopPropagation();
-            startPlaying(movie);
+            startPlaying(
+              movie,
+              movie.embedUrl,
+              movie.currentEpisode ? formatEpisodeTitle(movie.currentEpisode) : undefined,
+              movie.m3u8Url
+            );
           }}
           aria-label="Phát"
           className="w-12 h-12 rounded-full bg-white/90 hover:bg-white text-black flex items-center justify-center shadow-xl transform scale-90 group-hover:scale-100 transition pointer-events-auto cursor-pointer"
@@ -97,7 +103,7 @@ export const ContinueWatchingCard: React.FC<ContinueWatchingCardProps> = ({
           </h3>
           {movie.currentEpisode && (
             <p className="text-[11px] text-zinc-300 drop-shadow line-clamp-1 mt-0.5">
-              {movie.currentEpisode}
+              {formatEpisodeTitle(movie.currentEpisode)}
             </p>
           )}
         </div>

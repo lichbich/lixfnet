@@ -1,6 +1,7 @@
 'use client';
 
-import React, { useRef, useState, useEffect, useCallback } from 'react';
+import React, { useRef, useState, useEffect, useCallback, useMemo } from 'react';
+import Hls from 'hls.js';
 import {
   ArrowLeft,
   Play,
@@ -13,9 +14,12 @@ import {
   Minimize,
   MessageSquare,
   ListVideo,
+  MonitorPlay,
+  Sparkles,
+  X,
 } from 'lucide-react';
 import { useNetflix } from '@/context/NetflixContext';
-import { getMovieDetail } from '@/services/movieApi';
+import { getMovieDetail, formatEpisodeTitle } from '@/services/movieApi';
 
 export const VideoPlayerModal: React.FC = () => {
   const {
@@ -23,6 +27,7 @@ export const VideoPlayerModal: React.FC = () => {
     stopPlaying,
     currentEpisodeEmbed,
     currentEpisodeTitle,
+    currentEpisodeM3u8,
     setPlayingEpisode,
     updateWatchProgress,
     getWatchProgress,
@@ -32,6 +37,7 @@ export const VideoPlayerModal: React.FC = () => {
 
   const videoRef = useRef<HTMLVideoElement>(null);
   const playerContainerRef = useRef<HTMLDivElement>(null);
+  const hlsRef = useRef<Hls | null>(null);
 
   const [isPlaying, setIsPlaying] = useState(true);
   const [currentTime, setCurrentTime] = useState(0);
@@ -41,11 +47,10 @@ export const VideoPlayerModal: React.FC = () => {
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [showControls, setShowControls] = useState(true);
   const [showEpisodeSelector, setShowEpisodeSelector] = useState(false);
+  const [useIframeFallback, setUseIframeFallback] = useState(false);
 
-  // Resume states
-  const [showResumeDialog, setShowResumeDialog] = useState(false);
-  const [resumeToast, setResumeToast] = useState<string | null>(null);
-  const [resumeTime, setResumeTime] = useState(0);
+  // Resume notification state
+  const [resumeToast, setResumeToast] = useState<{ title: string; seconds: number } | null>(null);
   const sessionSecondsRef = useRef(0);
 
   // Cinematic fade transitions
@@ -59,6 +64,104 @@ export const VideoPlayerModal: React.FC = () => {
   // Active stream and server references
   const activeEmbed = currentEpisodeEmbed || playingMovie?.embedUrl;
   const currentServer = playingMovie?.episodesServers?.[0];
+
+  const resolvedM3u8 = (() => {
+    if (currentEpisodeM3u8) return currentEpisodeM3u8;
+    if (currentServer?.items) {
+      const match = currentServer.items.find(
+        (ep) =>
+          ep.embed === activeEmbed ||
+          formatEpisodeTitle(ep.name) === formatEpisodeTitle(currentEpisodeTitle || '')
+      );
+      if (match?.m3u8) return match.m3u8;
+    }
+    return playingMovie?.m3u8Url || null;
+  })();
+
+  const isDirectHls = Boolean(resolvedM3u8 && !useIframeFallback);
+  const isLocalVideo = Boolean(playingMovie?.videoUrl && !resolvedM3u8 && !activeEmbed);
+  const isDirectVideo = isDirectHls || isLocalVideo;
+
+  // Determine if a valid next episode exists in the current server list
+  // Safety guard: If current episode is the latest or finale, nextEpisode is strictly null
+  const nextEpisode = useMemo(() => {
+    if (!currentServer?.items || currentServer.items.length <= 1) return null;
+    const currentTitle = formatEpisodeTitle(
+      currentEpisodeTitle || playingMovie?.currentEpisode || ''
+    );
+    const currentIndex = currentServer.items.findIndex(
+      (ep) =>
+        (activeEmbed && ep.embed === activeEmbed) ||
+        (resolvedM3u8 && ep.m3u8 === resolvedM3u8) ||
+        formatEpisodeTitle(ep.name) === currentTitle
+    );
+    if (currentIndex >= 0 && currentIndex + 1 < currentServer.items.length) {
+      return currentServer.items[currentIndex + 1];
+    }
+    return null;
+  }, [
+    currentServer,
+    activeEmbed,
+    resolvedM3u8,
+    currentEpisodeTitle,
+    playingMovie?.currentEpisode,
+    formatEpisodeTitle,
+  ]);
+
+  // Next Episode Card state (triggers ~90s before end, auto-hides after 5s without auto-advance, revives on mouse/touch)
+  const [showNextEpCard, setShowNextEpCard] = useState(false);
+  const nextEpTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const hasTriggeredNearEndRef = useRef(false);
+  const nextEpisodeRef = useRef(nextEpisode);
+  nextEpisodeRef.current = nextEpisode;
+
+  const isNearEnd = Boolean(
+    nextEpisode &&
+      duration > 120 &&
+      currentTime >= duration - 90 &&
+      currentTime < duration
+  );
+  const isNearEndRef = useRef(isNearEnd);
+  isNearEndRef.current = isNearEnd;
+
+  // Revives the Next Episode Card and sets a gentle 5-second auto-hide timeout
+  const resetNextEpTimer = useCallback(() => {
+    if (!nextEpisodeRef.current || !isNearEndRef.current) return;
+    setShowNextEpCard(true);
+    if (nextEpTimerRef.current) {
+      clearTimeout(nextEpTimerRef.current);
+    }
+    nextEpTimerRef.current = setTimeout(() => {
+      setShowNextEpCard(false);
+    }, 5000);
+  }, []);
+
+  // Immediately switch to the next episode
+  const handlePlayNextEpisode = useCallback(() => {
+    if (!nextEpisodeRef.current) return;
+    if (nextEpTimerRef.current) {
+      clearTimeout(nextEpTimerRef.current);
+      nextEpTimerRef.current = null;
+    }
+    setShowNextEpCard(false);
+    hasTriggeredNearEndRef.current = false;
+    const nextEp = nextEpisodeRef.current;
+    setPlayingEpisode(
+      nextEp.embed,
+      formatEpisodeTitle(nextEp.name),
+      nextEp.m3u8
+    );
+  }, [setPlayingEpisode, formatEpisodeTitle]);
+
+  // Reset next episode card states whenever active episode changes
+  useEffect(() => {
+    setShowNextEpCard(false);
+    hasTriggeredNearEndRef.current = false;
+    if (nextEpTimerRef.current) {
+      clearTimeout(nextEpTimerRef.current);
+      nextEpTimerRef.current = null;
+    }
+  }, [activeEmbed, resolvedM3u8, currentEpisodeTitle, playingMovie?.id]);
 
   // Smooth fade-in on mount
   useEffect(() => {
@@ -75,18 +178,36 @@ export const VideoPlayerModal: React.FC = () => {
     }
   }, [playingMovie?.id, playingMovie?.slug]);
 
-  // When activeEmbed changes, reset video loaded state with safety fallback
+  // When active stream changes, reset video loaded state with safety fallback
   useEffect(() => {
     setIsVideoLoaded(false);
     const safetyTimer = setTimeout(() => {
       setIsVideoLoaded(true);
-    }, 2000);
+    }, 2500);
     return () => clearTimeout(safetyTimer);
-  }, [activeEmbed]);
+  }, [activeEmbed, resolvedM3u8, useIframeFallback]);
 
-  const handleClose = () => {
+  const handleClose = useCallback(() => {
     if (isClosingRef.current) return;
     isClosingRef.current = true;
+
+    // Immediately save current progress before closing
+    if (playingMovie) {
+      const cur = videoRef.current ? Math.round(videoRef.current.currentTime) : sessionSecondsRef.current;
+      const dur =
+        videoRef.current && videoRef.current.duration > 0
+          ? Math.round(videoRef.current.duration)
+          : duration || 45 * 60;
+      updateWatchProgress(
+        playingMovie,
+        cur,
+        dur,
+        currentEpisodeTitle || playingMovie.currentEpisode,
+        activeEmbed || playingMovie.embedUrl,
+        resolvedM3u8 || playingMovie.m3u8Url
+      );
+    }
+
     try {
       if (document.fullscreenElement) {
         document.exitFullscreen().catch(() => {});
@@ -95,6 +216,11 @@ export const VideoPlayerModal: React.FC = () => {
         (screen.orientation as any).unlock();
       }
     } catch {}
+    if (nextEpTimerRef.current) {
+      clearTimeout(nextEpTimerRef.current);
+      nextEpTimerRef.current = null;
+    }
+    setShowNextEpCard(false);
     setIsFullscreen(false);
     setIsCssRotated(false);
     setIsOpen(false);
@@ -107,9 +233,9 @@ export const VideoPlayerModal: React.FC = () => {
         }
       } catch {}
     }, 300);
-  };
+  }, [playingMovie, duration, currentEpisodeTitle, activeEmbed, resolvedM3u8, stopPlaying, updateWatchProgress]);
 
-  // Android hardware back / browser history integration so back button or swipe gesture exits player
+  // Android hardware back / browser history integration
   useEffect(() => {
     if (!playingMovie) return;
     try {
@@ -124,7 +250,7 @@ export const VideoPlayerModal: React.FC = () => {
     return () => {
       window.removeEventListener('popstate', handlePop);
     };
-  }, [playingMovie?.id]);
+  }, [playingMovie?.id, handleClose]);
 
   // Auto-request landscape fullscreen on mobile when entering player
   useEffect(() => {
@@ -147,7 +273,6 @@ export const VideoPlayerModal: React.FC = () => {
             setIsCssRotated(true);
           }
         } catch {
-          // If browser restricts native orientation lock, auto-apply CSS 90deg rotation if portrait
           if (window.innerHeight > window.innerWidth) {
             setIsCssRotated(true);
           }
@@ -157,7 +282,7 @@ export const VideoPlayerModal: React.FC = () => {
     }
   }, [playingMovie?.id]);
 
-  // Listen to physical orientation change (if user physically turns phone sideways, turn off CSS rotation)
+  // Listen to physical orientation change
   useEffect(() => {
     const handleOrientation = () => {
       if (typeof window === 'undefined') return;
@@ -174,7 +299,7 @@ export const VideoPlayerModal: React.FC = () => {
     };
   }, []);
 
-  // Toggle landscape / portrait rotation (attempts native orientation lock, falls back to hardware-accelerated CSS 90deg rotation)
+  // Toggle landscape / portrait rotation
   const toggleRotate = async () => {
     try {
       if (!isCssRotated) {
@@ -201,20 +326,21 @@ export const VideoPlayerModal: React.FC = () => {
   // Episode / Movie change handler: initialize progress and notify user
   useEffect(() => {
     if (!playingMovie) {
-      setShowResumeDialog(false);
       setResumeToast(null);
       sessionSecondsRef.current = 0;
       return;
     }
 
     const movieKey = playingMovie.slug || playingMovie.id;
-    const currentEp = currentEpisodeTitle || playingMovie.currentEpisode || 'Tập 1';
+    const currentEp = formatEpisodeTitle(currentEpisodeTitle || playingMovie.currentEpisode || 'Tập 1');
     const epProg = getEpisodeProgress(movieKey, currentEp);
     const movieProg = getWatchProgress(movieKey);
 
     const initialSecs =
       epProg?.currentTime ||
-      (currentEp === movieProg?.episodeTitle ? movieProg?.currentTime : 0) ||
+      (formatEpisodeTitle(currentEp) === formatEpisodeTitle(movieProg?.episodeTitle || '')
+        ? movieProg?.currentTime
+        : 0) ||
       0;
     sessionSecondsRef.current = initialSecs;
 
@@ -230,44 +356,127 @@ export const VideoPlayerModal: React.FC = () => {
       initialSecs,
       defaultSecs,
       currentEp,
-      currentEpisodeEmbed || playingMovie.embedUrl
+      activeEmbed || playingMovie.embedUrl,
+      resolvedM3u8 || playingMovie.m3u8Url
     );
 
-    // If iframe embed: do NOT show blocking popup dialog (NguonC/JWPlayer handles its own resume);
-    // show a non-intrusive toast notification instead
-    if (activeEmbed) {
-      setShowResumeDialog(false);
-      if (initialSecs > 15 || currentEp !== 'Tập 1') {
-        setResumeToast(currentEp);
-        const timer = setTimeout(() => setResumeToast(null), 3500);
-        return () => clearTimeout(timer);
-      }
+    // Show resume toast notification if watched more than 5 seconds
+    if (initialSecs > 5) {
+      setResumeToast({ title: currentEp, seconds: initialSecs });
+      const timer = setTimeout(() => setResumeToast(null), 6000);
+      return () => clearTimeout(timer);
     } else {
-      // For local HTML5 video (demo/trailers), show resume dialog if > 15s
-      if (initialSecs > 15) {
-        setResumeTime(initialSecs);
-        setShowResumeDialog(true);
-      } else {
-        setShowResumeDialog(false);
-      }
+      setResumeToast(null);
     }
   }, [
     playingMovie?.id,
     playingMovie?.slug,
     currentEpisodeTitle,
     currentEpisodeEmbed,
+    currentEpisodeM3u8,
     activeEmbed,
+    resolvedM3u8,
     getWatchProgress,
     getEpisodeProgress,
     updateWatchProgress,
   ]);
 
-  // Periodic watch progress tracker (counts watch time smoothly while tab is active)
+  // HLS stream attachment & native seek handling
+  useEffect(() => {
+    if (!playingMovie) return;
+    if (!isDirectHls || !resolvedM3u8) {
+      if (hlsRef.current) {
+        hlsRef.current.destroy();
+        hlsRef.current = null;
+      }
+      return;
+    }
+
+    const video = videoRef.current;
+    if (!video) return;
+
+    let hls: Hls | null = null;
+
+    if (Hls.isSupported()) {
+      hls = new Hls({
+        enableWorker: true,
+        lowLatencyMode: false,
+        backBufferLength: 90,
+      });
+      hlsRef.current = hls;
+
+      hls.loadSource(resolvedM3u8);
+      hls.attachMedia(video);
+
+      hls.on(Hls.Events.MANIFEST_PARSED, () => {
+        setIsVideoLoaded(true);
+        if (sessionSecondsRef.current > 5) {
+          try {
+            video.currentTime = sessionSecondsRef.current;
+            setCurrentTime(sessionSecondsRef.current);
+          } catch {}
+        }
+        video
+          .play()
+          .then(() => setIsPlaying(true))
+          .catch(() => setIsPlaying(false));
+      });
+
+      hls.on(Hls.Events.ERROR, (_event, data) => {
+        if (data.fatal) {
+          switch (data.type) {
+            case Hls.ErrorTypes.NETWORK_ERROR:
+              console.warn('HLS Network error, attempting recovery...');
+              hls?.startLoad();
+              break;
+            case Hls.ErrorTypes.MEDIA_ERROR:
+              console.warn('HLS Media error, attempting recovery...');
+              hls?.recoverMediaError();
+              break;
+            default:
+              console.warn('Fatal unrecoverable HLS error, switching to iframe fallback:', data);
+              hls?.destroy();
+              hlsRef.current = null;
+              setUseIframeFallback(true);
+              break;
+          }
+        }
+      });
+    } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
+      // Native Safari / iOS HLS
+      video.src = resolvedM3u8;
+      const onLoaded = () => {
+        setIsVideoLoaded(true);
+        if (sessionSecondsRef.current > 5) {
+          try {
+            video.currentTime = sessionSecondsRef.current;
+            setCurrentTime(sessionSecondsRef.current);
+          } catch {}
+        }
+        video
+          .play()
+          .then(() => setIsPlaying(true))
+          .catch(() => setIsPlaying(false));
+      };
+      video.addEventListener('loadedmetadata', onLoaded);
+      return () => {
+        video.removeEventListener('loadedmetadata', onLoaded);
+      };
+    }
+
+    return () => {
+      if (hls) {
+        hls.destroy();
+        hlsRef.current = null;
+      }
+    };
+  }, [resolvedM3u8, isDirectHls, playingMovie?.id, playingMovie?.slug, currentEpisodeEmbed]);
+
+  // Periodic watch progress tracker (saves every 4 seconds)
   useEffect(() => {
     if (!playingMovie) return;
 
     const interval = setInterval(() => {
-      // Do not increment if user switched away to another tab
       if (typeof document !== 'undefined' && document.hidden) return;
 
       const defaultSecs = playingMovie.durationMinutes
@@ -279,16 +488,15 @@ export const VideoPlayerModal: React.FC = () => {
       let nextTime: number;
       let dur: number;
 
-      if (videoRef.current) {
+      if (videoRef.current && isDirectVideo) {
         nextTime = Math.round(videoRef.current.currentTime);
         dur =
           videoRef.current.duration > 0 && !isNaN(videoRef.current.duration)
-            ? videoRef.current.duration
+            ? Math.round(videoRef.current.duration)
             : defaultSecs;
         sessionSecondsRef.current = nextTime;
       } else {
-        // Accumulate seconds for active embed to keep progress bar alive & realistic
-        sessionSecondsRef.current = Math.min(sessionSecondsRef.current + 5, defaultSecs);
+        sessionSecondsRef.current = Math.min(sessionSecondsRef.current + 4, defaultSecs);
         nextTime = sessionSecondsRef.current;
         dur = defaultSecs;
       }
@@ -298,22 +506,23 @@ export const VideoPlayerModal: React.FC = () => {
         nextTime,
         dur,
         currentEpisodeTitle || playingMovie.currentEpisode,
-        currentEpisodeEmbed || playingMovie.embedUrl
+        activeEmbed || playingMovie.embedUrl,
+        resolvedM3u8 || playingMovie.m3u8Url
       );
-    }, 5000);
+    }, 4000);
 
     return () => clearInterval(interval);
-  }, [playingMovie, currentEpisodeTitle, currentEpisodeEmbed, updateWatchProgress]);
+  }, [playingMovie, currentEpisodeTitle, activeEmbed, resolvedM3u8, isDirectVideo, updateWatchProgress]);
 
-  // Self-healing fallback: If player is open without activeEmbed but has a movie slug, resolve stream
+  // Self-healing fallback: If player is open without activeEmbed/resolvedM3u8 but has a movie slug
   useEffect(() => {
-    if (playingMovie && !activeEmbed && playingMovie.slug) {
+    if (playingMovie && !activeEmbed && !resolvedM3u8 && playingMovie.slug) {
       let isCancelled = false;
       const key = playingMovie.slug || playingMovie.id;
       const wp = getWatchProgress(key);
 
-      if (wp?.episodeEmbed) {
-        setPlayingEpisode(wp.episodeEmbed, wp.episodeTitle || 'Tập 1');
+      if (wp?.episodeEmbed || wp?.episodeM3u8) {
+        setPlayingEpisode(wp.episodeEmbed || '', wp.episodeTitle || 'Tập 1', wp.episodeM3u8);
       } else {
         getMovieDetail(playingMovie.slug)
           .then((detailed) => {
@@ -321,10 +530,12 @@ export const VideoPlayerModal: React.FC = () => {
             const firstServer = detailed.episodesServers?.[0];
             const firstEp = firstServer?.items?.[0];
             const resolvedEmbed = firstEp?.embed || detailed.embedUrl;
-            if (resolvedEmbed) {
+            const resM3u8 = firstEp?.m3u8 || detailed.m3u8Url;
+            if (resolvedEmbed || resM3u8) {
               setPlayingEpisode(
-                resolvedEmbed,
-                firstEp ? `Tập ${firstEp.name}` : (detailed.currentEpisode || 'Tập 1')
+                resolvedEmbed || '',
+                firstEp ? formatEpisodeTitle(firstEp.name) : (detailed.currentEpisode ? formatEpisodeTitle(detailed.currentEpisode) : 'Tập 1'),
+                resM3u8
               );
             }
           })
@@ -337,9 +548,9 @@ export const VideoPlayerModal: React.FC = () => {
         isCancelled = true;
       };
     }
-  }, [playingMovie?.id, playingMovie?.slug, activeEmbed, getWatchProgress, setPlayingEpisode]);
+  }, [playingMovie?.id, playingMovie?.slug, activeEmbed, resolvedM3u8, getWatchProgress, setPlayingEpisode]);
 
-  // Auto-hide controls timer with refs & interaction handlers
+  // Auto-hide controls timer
   const controlsTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const showEpisodeSelectorRef = useRef(showEpisodeSelector);
   showEpisodeSelectorRef.current = showEpisodeSelector;
@@ -352,14 +563,12 @@ export const VideoPlayerModal: React.FC = () => {
       clearTimeout(controlsTimeoutRef.current);
     }
     controlsTimeoutRef.current = setTimeout(() => {
-      // Never hide controls while episode picker is open
       if (isPlayingRef.current && !showEpisodeSelectorRef.current) {
         setShowControls(false);
       }
     }, 3500);
   }, []);
 
-  // When episode selector opens, freeze controls visible; when closed, resume timer
   useEffect(() => {
     if (showEpisodeSelector) {
       if (controlsTimeoutRef.current) clearTimeout(controlsTimeoutRef.current);
@@ -369,12 +578,13 @@ export const VideoPlayerModal: React.FC = () => {
     }
   }, [showEpisodeSelector, resetControlsTimer]);
 
-  // Global interaction listeners (mouse, touch, iframe focus/blur)
   useEffect(() => {
     resetControlsTimer();
-
     const handleInteraction = () => {
       resetControlsTimer();
+      if (isNearEndRef.current && nextEpisodeRef.current) {
+        resetNextEpTimer();
+      }
     };
 
     window.addEventListener('mousemove', handleInteraction);
@@ -388,63 +598,79 @@ export const VideoPlayerModal: React.FC = () => {
       window.removeEventListener('pointerdown', handleInteraction);
       window.removeEventListener('blur', handleInteraction);
       if (controlsTimeoutRef.current) clearTimeout(controlsTimeoutRef.current);
+      if (nextEpTimerRef.current) clearTimeout(nextEpTimerRef.current);
     };
-  }, [resetControlsTimer]);
+  }, [resetControlsTimer, resetNextEpTimer]);
 
-  // Keyboard shortcuts
-  useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (!playingMovie) return;
-      if (e.key === 'Escape') {
-        handleClose();
-      } else if (e.code === 'Space' && !currentEpisodeEmbed) {
-        e.preventDefault();
-        togglePlay();
-      } else if (e.key === 'ArrowRight' && !currentEpisodeEmbed) {
-        skipTime(10);
-      } else if (e.key === 'ArrowLeft' && !currentEpisodeEmbed) {
-        skipTime(-10);
-      }
-    };
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [playingMovie, isPlaying, currentEpisodeEmbed]);
-
-  if (!playingMovie) return null;
-
-  const togglePlay = () => {
+  // Video interaction controls
+  const togglePlay = useCallback(() => {
     if (videoRef.current) {
-      if (isPlaying) {
-        videoRef.current.pause();
-        setIsPlaying(false);
-      } else {
+      if (videoRef.current.paused) {
         videoRef.current.play();
         setIsPlaying(true);
+      } else {
+        videoRef.current.pause();
+        setIsPlaying(false);
       }
     }
-  };
+  }, []);
 
-  const skipTime = (amount: number) => {
+  const skipTime = useCallback((amount: number) => {
     if (videoRef.current) {
-      videoRef.current.currentTime += amount;
+      videoRef.current.currentTime = Math.max(0, videoRef.current.currentTime + amount);
+      setCurrentTime(videoRef.current.currentTime);
+      sessionSecondsRef.current = Math.round(videoRef.current.currentTime);
     }
-  };
+  }, []);
 
   const handleTimeUpdate = () => {
     if (videoRef.current) {
-      setCurrentTime(videoRef.current.currentTime);
+      const cur = videoRef.current.currentTime;
+      const dur = videoRef.current.duration;
+      setCurrentTime(cur);
+      sessionSecondsRef.current = Math.round(cur);
+
+      // Check for 90s near-end trigger for Next Episode card
+      if (nextEpisodeRef.current && dur > 120) {
+        const remaining = dur - cur;
+        if (remaining <= 90 && remaining > 0) {
+          if (!hasTriggeredNearEndRef.current) {
+            hasTriggeredNearEndRef.current = true;
+            resetNextEpTimer();
+          }
+        } else if (remaining > 90) {
+          // If user seeks backwards before the 90s mark, reset trigger & hide card
+          if (hasTriggeredNearEndRef.current) {
+            hasTriggeredNearEndRef.current = false;
+            setShowNextEpCard(false);
+            if (nextEpTimerRef.current) {
+              clearTimeout(nextEpTimerRef.current);
+              nextEpTimerRef.current = null;
+            }
+          }
+        }
+      }
     }
   };
 
   const handleLoadedMetadata = () => {
     if (videoRef.current) {
-      setDuration(videoRef.current.duration);
+      const dur = videoRef.current.duration;
+      if (dur > 0 && !isNaN(dur)) {
+        setDuration(dur);
+      }
+      if (sessionSecondsRef.current > 5 && Math.abs(videoRef.current.currentTime - sessionSecondsRef.current) > 2) {
+        try {
+          videoRef.current.currentTime = sessionSecondsRef.current;
+        } catch {}
+      }
     }
   };
 
   const handleSeek = (e: React.ChangeEvent<HTMLInputElement>) => {
     const seekTime = Number(e.target.value);
     setCurrentTime(seekTime);
+    sessionSecondsRef.current = Math.round(seekTime);
     if (videoRef.current) {
       videoRef.current.currentTime = seekTime;
     }
@@ -459,19 +685,19 @@ export const VideoPlayerModal: React.FC = () => {
     }
   };
 
-  const toggleMute = () => {
+  const toggleMute = useCallback(() => {
     if (videoRef.current) {
       if (isMuted) {
-        videoRef.current.volume = volume || 0.5;
+        videoRef.current.volume = volume || 0.8;
         setIsMuted(false);
       } else {
         videoRef.current.volume = 0;
         setIsMuted(true);
       }
     }
-  };
+  }, [isMuted, volume]);
 
-  const toggleFullscreen = () => {
+  const toggleFullscreen = useCallback(() => {
     if (!document.fullscreenElement) {
       playerContainerRef.current?.requestFullscreen();
       setIsFullscreen(true);
@@ -479,13 +705,53 @@ export const VideoPlayerModal: React.FC = () => {
       document.exitFullscreen();
       setIsFullscreen(false);
     }
+  }, []);
+
+  // Keyboard shortcuts
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (!playingMovie) return;
+      if (e.key === 'Escape') {
+        handleClose();
+      } else if (e.code === 'Space' && isDirectVideo) {
+        e.preventDefault();
+        togglePlay();
+      } else if (e.key === 'ArrowRight' && isDirectVideo) {
+        skipTime(10);
+      } else if (e.key === 'ArrowLeft' && isDirectVideo) {
+        skipTime(-10);
+      } else if ((e.key === 'm' || e.key === 'M') && isDirectVideo) {
+        toggleMute();
+      } else if ((e.key === 'f' || e.key === 'F') && isDirectVideo) {
+        toggleFullscreen();
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [playingMovie, isDirectVideo, togglePlay, skipTime, toggleMute, toggleFullscreen, handleClose]);
+
+  // Auto-advance to next episode when video ends
+  const handleVideoEnded = () => {
+    if (nextEpisodeRef.current) {
+      handlePlayNextEpisode();
+    }
   };
 
   const formatTime = (secs: number) => {
-    const m = Math.floor(secs / 60);
+    const h = Math.floor(secs / 3600);
+    const m = Math.floor((secs % 3600) / 60);
     const s = Math.floor(secs % 60);
+    if (h > 0) {
+      return `${h}:${m < 10 ? '0' : ''}${m}:${s < 10 ? '0' : ''}${s}`;
+    }
     return `${m}:${s < 10 ? '0' : ''}${s}`;
   };
+
+  if (!playingMovie) return null;
+
+  const displayEpisodeTitle = formatEpisodeTitle(
+    currentEpisodeTitle || playingMovie.currentEpisode || 'Tập 1'
+  );
 
   return (
     <div
@@ -511,77 +777,56 @@ export const VideoPlayerModal: React.FC = () => {
       onMouseMove={resetControlsTimer}
       onTouchStart={resetControlsTimer}
     >
-
-      {/* Resume Playback Dialog (Only for local HTML5 video, never blocking iframe) */}
-      {showResumeDialog && !activeEmbed && (
-        <div className="absolute inset-0 z-50 bg-black/75 backdrop-blur-sm flex items-center justify-center p-4 animate-in fade-in duration-200">
-          <div className="bg-[#181d26] border border-white/10 rounded-2xl p-6 sm:p-8 max-w-md w-full shadow-2xl text-center space-y-4">
-            <h3 className="text-xl sm:text-2xl font-bold text-white">Tiếp tục xem?</h3>
-            <p className="text-sm text-zinc-300">
-              Bạn đã dừng tại{' '}
-              <strong className="text-white font-bold">
-                {Math.floor(resumeTime / 60)} phút {Math.floor(resumeTime % 60)} giây
-              </strong>
-            </p>
-            <div className="flex items-center justify-center gap-3 pt-2">
-              <button
-                onClick={() => {
-                  setShowResumeDialog(false);
-                  if (videoRef.current) {
-                    videoRef.current.currentTime = resumeTime;
-                    videoRef.current.play();
-                  }
-                }}
-                className="bg-[#E50914] hover:bg-red-700 text-white font-bold px-6 py-2.5 rounded-lg text-sm transition shadow-lg active:scale-95"
-              >
-                Tiếp tục xem
-              </button>
-              <button
-                onClick={() => {
-                  setShowResumeDialog(false);
-                  if (videoRef.current) {
-                    videoRef.current.currentTime = 0;
-                    videoRef.current.play();
-                  }
-                  if (playingMovie) {
-                    updateWatchProgress(
-                      playingMovie,
-                      0,
-                      45 * 60,
-                      currentEpisodeTitle || playingMovie.currentEpisode,
-                      currentEpisodeEmbed || playingMovie.embedUrl
-                    );
-                  }
-                }}
-                className="bg-zinc-800 hover:bg-zinc-700 text-zinc-200 font-semibold px-5 py-2.5 rounded-lg text-sm transition active:scale-95 border border-white/10"
-              >
-                Xem lại từ đầu
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Non-intrusive Resume Toast for Iframe Stream */}
+      {/* Resume Notification Toast with One-Click Restart */}
       {resumeToast && (
-        <div className="absolute top-16 sm:top-20 left-1/2 -translate-x-1/2 z-40 bg-zinc-900/90 backdrop-blur-md border border-red-500/30 text-white px-4 py-2 rounded-full shadow-2xl flex items-center gap-2.5 text-xs sm:text-sm font-semibold animate-in fade-in slide-in-from-top-4 duration-300 pointer-events-none">
-          <span className="w-2.5 h-2.5 rounded-full bg-red-600 animate-pulse" />
+        <div className="absolute top-16 sm:top-20 left-1/2 -translate-x-1/2 z-50 bg-black/90 backdrop-blur-md border border-red-500/40 text-white px-4 py-2.5 rounded-full shadow-[0_10px_30px_rgba(0,0,0,0.85)] flex items-center gap-3 text-xs sm:text-sm font-medium animate-in fade-in slide-in-from-top-4 duration-300 pointer-events-auto">
+          <span className="w-2.5 h-2.5 rounded-full bg-red-600 animate-pulse shrink-0" />
           <span>
-            Đang phát: <strong className="text-red-400">{resumeToast}</strong>
+            Đang phát: <strong className="text-red-400">{resumeToast.title}</strong>
+            {resumeToast.seconds > 10 && (
+              <>
+                {' '}• Tiếp tục từ{' '}
+                <strong className="text-white font-bold">{formatTime(resumeToast.seconds)}</strong>
+              </>
+            )}
           </span>
+          {resumeToast.seconds > 10 && (
+            <button
+              onClick={() => {
+                if (videoRef.current) {
+                  videoRef.current.currentTime = 0;
+                  setCurrentTime(0);
+                  sessionSecondsRef.current = 0;
+                }
+                setResumeToast(null);
+                if (playingMovie) {
+                  updateWatchProgress(
+                    playingMovie,
+                    0,
+                    duration || 45 * 60,
+                    currentEpisodeTitle || playingMovie.currentEpisode,
+                    activeEmbed || playingMovie.embedUrl,
+                    resolvedM3u8 || playingMovie.m3u8Url
+                  );
+                }
+              }}
+              className="ml-1 text-[11px] font-bold uppercase tracking-wider text-zinc-300 hover:text-white bg-white/10 hover:bg-white/20 px-2.5 py-1 rounded-full border border-white/20 transition cursor-pointer"
+            >
+              Xem lại từ đầu
+            </button>
+          )}
         </div>
       )}
 
-      {/* CASE 1: REAL API EMBED STREAMING */}
-      {activeEmbed ? (
-        <div className="relative w-full h-full flex flex-col bg-black">
-          {/* Ambient Cinema Backdrop & Loading Veil (Shows while video is loading, then dissolves smoothly) */}
+      {/* CASE 1: DIRECT HLS / LOCAL VIDEO PLAYBACK */}
+      {isDirectVideo ? (
+        <div className="relative w-full h-full flex flex-col items-center justify-center bg-black">
+          {/* Ambient Blurred Artwork Loading Screen */}
           <div
             className={`absolute inset-0 z-10 transition-opacity duration-1000 ease-out pointer-events-none ${
               isVideoLoaded ? 'opacity-0' : 'opacity-100'
             }`}
           >
-            {/* Ambient Blurred Artwork */}
             {playingMovie.backdropUrl || playingMovie.posterUrl ? (
               <div
                 className="absolute inset-0 bg-cover bg-center filter blur-3xl scale-110 opacity-35 brightness-50"
@@ -590,11 +835,440 @@ export const VideoPlayerModal: React.FC = () => {
                 }}
               />
             ) : null}
-
-            {/* Deep Vignette */}
             <div className="absolute inset-0 bg-gradient-to-t from-black via-black/80 to-black/95" />
+            <div className="absolute inset-0 flex flex-col items-center justify-center p-6 text-center space-y-5">
+              <div className="relative flex items-center justify-center">
+                <div className="w-16 h-16 rounded-full bg-red-600/20 blur-xl animate-pulse" />
+                <div className="w-12 h-12 border-3 border-red-600/30 border-t-red-600 rounded-full animate-spin" />
+              </div>
+              <div className="space-y-1.5 max-w-lg">
+                <h2 className="text-xl sm:text-2xl md:text-3xl font-black text-white uppercase tracking-wide drop-shadow-lg">
+                  {playingMovie.title}
+                </h2>
+                <p className="text-sm text-red-400 font-bold uppercase tracking-wider">
+                  {displayEpisodeTitle}
+                </p>
+                <p className="text-xs text-zinc-400 font-medium tracking-wide pt-1 flex items-center justify-center gap-1.5">
+                  <Sparkles className="w-3.5 h-3.5 text-yellow-400 animate-spin" />
+                  Đang khởi tạo luồng phát Full HD mượt mà...
+                </p>
+              </div>
+            </div>
+          </div>
 
-            {/* Centered Cinema Loading Pulse */}
+          {/* HTML5 Video Element with HLS stream */}
+          <video
+            ref={videoRef}
+            src={!resolvedM3u8 ? playingMovie.videoUrl : undefined}
+            autoPlay
+            playsInline
+            onTimeUpdate={handleTimeUpdate}
+            onLoadedMetadata={handleLoadedMetadata}
+            onCanPlay={() => setIsVideoLoaded(true)}
+            onEnded={handleVideoEnded}
+            className={`w-full h-full object-contain transition-opacity duration-700 ease-out ${
+              isVideoLoaded ? 'opacity-100' : 'opacity-0'
+            }`}
+          />
+
+          {/* Netflix-Style "Next Episode" Liquid Glass Floating Card */}
+          {nextEpisode && (
+            <div
+              onClick={(e) => e.stopPropagation()}
+              className={`absolute right-4 sm:right-8 z-40 transition-all duration-500 ease-out transform ${
+                showControls ? 'bottom-28 sm:bottom-32' : 'bottom-6 sm:bottom-8'
+              } ${
+                showNextEpCard
+                  ? 'opacity-100 translate-y-0 scale-100 pointer-events-auto'
+                  : 'opacity-0 translate-y-4 scale-95 pointer-events-none'
+              }`}
+            >
+              <div className="relative overflow-hidden bg-black/30 hover:bg-black/40 backdrop-blur-2xl border border-white/20 hover:border-white/35 rounded-2xl p-4 sm:p-5 shadow-[inset_0_1px_1px_rgba(255,255,255,0.4),0_16px_40px_rgba(0,0,0,0.5)] w-72 sm:w-80 group/card transition-all duration-300">
+                {/* Liquid Glass Ambient Refraction Glows */}
+                <div className="absolute -top-12 -left-12 w-36 h-36 bg-gradient-to-br from-white/20 to-transparent rounded-full blur-2xl pointer-events-none" />
+                <div className="absolute -bottom-10 -right-10 w-32 h-32 bg-red-600/20 rounded-full blur-2xl pointer-events-none" />
+
+                {/* Dismiss Button */}
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setShowNextEpCard(false);
+                    if (nextEpTimerRef.current) {
+                      clearTimeout(nextEpTimerRef.current);
+                      nextEpTimerRef.current = null;
+                    }
+                  }}
+                  aria-label="Đóng thông báo tập tiếp theo"
+                  className="absolute top-3.5 right-3.5 w-6 h-6 rounded-full bg-white/10 hover:bg-white/25 active:scale-95 border border-white/20 flex items-center justify-center text-white/70 hover:text-white transition-all cursor-pointer z-10"
+                >
+                  <X className="w-3.5 h-3.5" />
+                </button>
+
+                {/* Card Header & Metadata */}
+                <div className="relative z-10 pr-6">
+                  <div className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-red-600/30 border border-red-500/40 backdrop-blur-md shadow-sm">
+                    <Sparkles className="w-3 h-3 text-red-400 animate-pulse" />
+                    <span className="text-[10px] sm:text-[11px] font-black tracking-wider text-red-300 uppercase">
+                      Tập tiếp theo
+                    </span>
+                  </div>
+                  <h4 className="text-white font-extrabold text-base sm:text-lg mt-2 line-clamp-1 drop-shadow-[0_2px_4px_rgba(0,0,0,0.9)]">
+                    {formatEpisodeTitle(nextEpisode.name)}
+                  </h4>
+                  <p className="text-zinc-200 text-xs line-clamp-1 mt-0.5 font-medium drop-shadow-[0_1px_3px_rgba(0,0,0,0.85)]">
+                    {playingMovie.title}
+                  </p>
+                </div>
+
+                {/* Action Button: Phát ngay (Liquid Glass Pill with Shimmer) */}
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    handlePlayNextEpisode();
+                  }}
+                  className="relative z-10 overflow-hidden mt-4 w-full py-2.5 px-4 bg-white/20 hover:bg-white/30 active:scale-98 text-white backdrop-blur-xl border border-white/35 hover:border-white/50 rounded-xl flex items-center justify-center gap-2 shadow-[inset_0_1px_1.5px_rgba(255,255,255,0.6),0_6px_20px_rgba(0,0,0,0.35)] transition-all cursor-pointer group/btn"
+                >
+                  {/* Subtle Liquid Shimmer sweep effect */}
+                  <span className="absolute inset-0 -translate-x-full group-hover/btn:translate-x-full transition-transform duration-1000 bg-gradient-to-r from-transparent via-white/25 to-transparent pointer-events-none" />
+
+                  <Play className="w-4 h-4 fill-white text-white drop-shadow-[0_0_6px_rgba(255,255,255,0.7)] group-hover/btn:scale-110 transition-transform" />
+                  <span className="font-extrabold text-xs sm:text-sm tracking-wide drop-shadow-[0_1px_2px_rgba(0,0,0,0.9)]">
+                    Phát ngay
+                  </span>
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* Full Custom Netflix UI Overlay Controls */}
+          <div
+            className={`absolute inset-0 flex flex-col justify-between p-4 sm:p-6 md:p-8 transition-opacity duration-300 pointer-events-none z-30 ${
+              showControls ? 'opacity-100' : 'opacity-0'
+            }`}
+          >
+            {/* Top Header Bar */}
+            <div
+              onClick={(e) => e.stopPropagation()}
+              className={`flex items-center justify-between text-white w-full bg-gradient-to-b from-black/95 via-black/50 to-transparent p-2.5 sm:p-3.5 rounded-2xl ${
+                showControls ? 'pointer-events-auto' : 'pointer-events-none'
+              }`}
+            >
+              {/* Left: Back button & Title */}
+              <div className="flex items-center gap-2.5 sm:gap-4 min-w-0 pr-2">
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    handleClose();
+                  }}
+                  aria-label="Thoát xem phim"
+                  className="flex items-center gap-1.5 sm:gap-2 px-3 py-1.5 sm:py-2 rounded-full bg-white/10 hover:bg-white/20 active:scale-95 text-white backdrop-blur-md border border-white/15 transition cursor-pointer group shrink-0"
+                >
+                  <ArrowLeft className="w-4 h-4 sm:w-5 sm:h-5 text-white group-hover:-translate-x-0.5 transition-transform" />
+                  <span className="text-xs sm:text-sm font-semibold tracking-wide pr-0.5">Thoát</span>
+                </button>
+
+                <div className="min-w-0">
+                  <h2 className="text-xs sm:text-base md:text-lg font-bold uppercase tracking-wide truncate max-w-[140px] xs:max-w-[200px] sm:max-w-xs md:max-w-md">
+                    {playingMovie.title}
+                  </h2>
+                  <div className="flex items-center gap-2 text-[11px] sm:text-xs text-zinc-300 font-medium">
+                    <span className="text-red-400 font-bold">{displayEpisodeTitle}</span>
+                    {playingMovie.subTitle && (
+                      <span className="hidden sm:inline text-zinc-400 truncate max-w-[220px]">
+                        • {playingMovie.subTitle}
+                      </span>
+                    )}
+                  </div>
+                </div>
+              </div>
+
+              {/* Right: Actions */}
+              <div className="flex items-center gap-2 sm:gap-3 shrink-0">
+                {/* Fallback to Iframe switch if embed is also available */}
+                {activeEmbed && (
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      resetControlsTimer();
+                      setUseIframeFallback(true);
+                    }}
+                    className="hidden md:flex items-center gap-1 px-2.5 py-1.5 rounded-full bg-white/10 hover:bg-white/20 text-zinc-300 hover:text-white border border-white/15 text-xs font-medium transition cursor-pointer"
+                    title="Chuyển sang trình phát Iframe dự phòng nếu gặp lỗi"
+                  >
+                    <MonitorPlay className="w-3.5 h-3.5" />
+                    <span>Dự phòng</span>
+                  </button>
+                )}
+
+                {/* 1-Tap Screen Orientation Switcher */}
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    resetControlsTimer();
+                    toggleRotate();
+                  }}
+                  aria-label="Xoay màn hình"
+                  className="flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 sm:py-2 rounded-full bg-white/10 hover:bg-white/20 active:scale-95 text-white backdrop-blur-md border border-white/15 transition cursor-pointer group text-xs sm:text-sm font-semibold"
+                  title={isCssRotated ? 'Xoay dọc màn hình' : 'Xoay ngang màn hình'}
+                >
+                  <RotateCw className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-red-500 group-hover:rotate-45 transition-transform" />
+                  <span className="hidden xs:inline">
+                    {isCssRotated ? 'Xoay dọc' : 'Xoay ngang'}
+                  </span>
+                </button>
+
+                {/* Episodes Selector Button if series */}
+                {currentServer && currentServer.items.length > 1 && (
+                  <div className="relative">
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        resetControlsTimer();
+                        setShowEpisodeSelector((prev) => !prev);
+                      }}
+                      aria-label="Danh sách tập"
+                      className="flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 sm:py-2 rounded-full bg-white/10 hover:bg-white/20 active:scale-95 text-white backdrop-blur-md border border-white/15 transition cursor-pointer text-xs sm:text-sm font-semibold"
+                    >
+                      <ListVideo className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-red-500" />
+                      <span className="hidden sm:inline">Chọn tập ({currentServer.items.length} tập)</span>
+                      <span className="sm:hidden">{displayEpisodeTitle}</span>
+                    </button>
+
+                    {/* Dropdown list of episodes */}
+                    {showEpisodeSelector && (
+                      <>
+                        <div
+                          className="fixed inset-0 z-40 pointer-events-auto"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setShowEpisodeSelector(false);
+                          }}
+                        />
+                        <div
+                          onClick={(e) => e.stopPropagation()}
+                          className="absolute right-0 top-full mt-2 w-72 sm:w-80 max-w-[calc(100vw-2rem)] max-h-80 overflow-y-auto bg-zinc-900/98 backdrop-blur-xl border border-zinc-700 rounded-xl p-2.5 grid grid-cols-4 gap-1.5 shadow-2xl z-50 animate-in fade-in zoom-in-95 duration-150 pointer-events-auto"
+                        >
+                          {currentServer.items.map((ep) => {
+                            const epTitle = formatEpisodeTitle(ep.name);
+                            const isEpActive =
+                              activeEmbed === ep.embed ||
+                              formatEpisodeTitle(currentEpisodeTitle || '') === epTitle;
+                            return (
+                              <button
+                                key={ep.slug}
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setPlayingEpisode(ep.embed, epTitle, ep.m3u8);
+                                  setShowEpisodeSelector(false);
+                                  resetControlsTimer();
+                                }}
+                                className={`p-2 text-xs rounded-lg font-bold transition text-center cursor-pointer ${
+                                  isEpActive
+                                    ? 'bg-red-600 text-white shadow-md'
+                                    : 'bg-zinc-800 hover:bg-zinc-700 text-zinc-300'
+                                }`}
+                              >
+                                {epTitle}
+                              </button>
+                            );
+                          })}
+                        </div>
+                      </>
+                    )}
+                  </div>
+                )}
+
+                {/* Fullscreen Button */}
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    resetControlsTimer();
+                    toggleFullscreen();
+                  }}
+                  aria-label="Toàn màn hình"
+                  className="w-8 h-8 sm:w-10 sm:h-10 rounded-full bg-white/10 hover:bg-white/20 flex items-center justify-center transition cursor-pointer border border-white/10"
+                >
+                  {isFullscreen ? (
+                    <Minimize className="w-4 h-4 sm:w-5 sm:h-5" />
+                  ) : (
+                    <Maximize className="w-4 h-4 sm:w-5 sm:h-5" />
+                  )}
+                </button>
+              </div>
+            </div>
+
+            {/* Middle tap/click zone to toggle play/pause */}
+            <div
+              className={`flex-1 w-full flex items-center justify-center cursor-pointer select-none ${
+                showControls ? 'pointer-events-auto' : 'pointer-events-auto'
+              }`}
+              onClick={(e) => {
+                e.stopPropagation();
+                togglePlay();
+                resetControlsTimer();
+              }}
+            >
+              {/* Big center play icon indicator if paused */}
+              {!isPlaying && isVideoLoaded && (
+                <div className="w-20 h-20 rounded-full bg-black/60 backdrop-blur-md border border-white/25 flex items-center justify-center shadow-2xl text-white transform hover:scale-110 transition-all pointer-events-none animate-in zoom-in-95 duration-150">
+                  <Play className="w-10 h-10 fill-white ml-1.5" />
+                </div>
+              )}
+            </div>
+
+            {/* Bottom Controls Bar */}
+            <div
+              onClick={(e) => e.stopPropagation()}
+              className={`space-y-3 bg-gradient-to-t from-black/95 via-black/60 to-transparent p-3 sm:p-4 rounded-2xl ${
+                showControls ? 'pointer-events-auto' : 'pointer-events-none'
+              }`}
+            >
+              {/* Timeline Scrubber */}
+              <div className="flex items-center gap-3">
+                <span className="text-xs text-zinc-300 font-medium w-14 text-right tabular-nums select-none">
+                  {formatTime(currentTime)}
+                </span>
+                <input
+                  type="range"
+                  min={0}
+                  max={duration || 100}
+                  step={1}
+                  value={currentTime}
+                  onClick={(e) => e.stopPropagation()}
+                  onMouseDown={(e) => e.stopPropagation()}
+                  onTouchStart={(e) => e.stopPropagation()}
+                  onChange={handleSeek}
+                  className="flex-1 h-1.5 bg-zinc-700 accent-red-600 rounded-lg cursor-pointer hover:h-2.5 transition-all pointer-events-auto"
+                />
+                <span className="text-xs text-zinc-300 font-medium w-14 tabular-nums select-none">
+                  {formatTime(Math.max(0, duration - currentTime))}
+                </span>
+              </div>
+
+              {/* Control Buttons */}
+              <div className="flex items-center justify-between text-white">
+                <div className="flex items-center gap-4 sm:gap-6">
+                  {/* Play / Pause */}
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      resetControlsTimer();
+                      togglePlay();
+                    }}
+                    aria-label={isPlaying ? 'Tạm dừng' : 'Phát'}
+                    className="hover:text-red-500 hover:scale-110 active:scale-95 transition cursor-pointer"
+                  >
+                    {isPlaying ? (
+                      <Pause className="w-6 h-6 fill-white" />
+                    ) : (
+                      <Play className="w-6 h-6 fill-white" />
+                    )}
+                  </button>
+
+                  {/* 10s backward */}
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      resetControlsTimer();
+                      skipTime(-10);
+                    }}
+                    aria-label="Tua lại 10 giây"
+                    className="hover:text-zinc-300 hover:scale-110 active:scale-95 transition cursor-pointer"
+                  >
+                    <RotateCcw className="w-5 h-5" />
+                  </button>
+
+                  {/* 10s forward */}
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      resetControlsTimer();
+                      skipTime(10);
+                    }}
+                    aria-label="Tua tới 10 giây"
+                    className="hover:text-zinc-300 hover:scale-110 active:scale-95 transition cursor-pointer"
+                  >
+                    <RotateCw className="w-5 h-5" />
+                  </button>
+
+                  {/* Volume control */}
+                  <div className="flex items-center gap-2 group/vol" onClick={(e) => e.stopPropagation()}>
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        resetControlsTimer();
+                        toggleMute();
+                      }}
+                      aria-label="Âm lượng"
+                      className="cursor-pointer hover:scale-110 transition-transform"
+                    >
+                      {isMuted || volume === 0 ? (
+                        <VolumeX className="w-5 h-5 text-red-400" />
+                      ) : (
+                        <Volume2 className="w-5 h-5" />
+                      )}
+                    </button>
+                    <input
+                      type="range"
+                      min={0}
+                      max={1}
+                      step={0.05}
+                      value={isMuted ? 0 : volume}
+                      onClick={(e) => e.stopPropagation()}
+                      onMouseDown={(e) => e.stopPropagation()}
+                      onTouchStart={(e) => e.stopPropagation()}
+                      onChange={handleVolumeChange}
+                      className="w-16 sm:w-20 h-1 bg-zinc-600 accent-white rounded cursor-pointer pointer-events-auto"
+                    />
+                  </div>
+                </div>
+
+                <div className="flex items-center gap-4 sm:gap-5">
+                  {/* Audio & Subtitles Badge */}
+                  <button
+                    onClick={(e) => e.stopPropagation()}
+                    title="Phụ đề & Âm thanh"
+                    className="hover:text-zinc-300 transition flex items-center gap-1.5 text-xs font-semibold cursor-pointer"
+                  >
+                    <MessageSquare className="w-5 h-5" />
+                    <span className="hidden sm:inline">Tiếng Việt • Full HD</span>
+                  </button>
+
+                  {/* Fullscreen */}
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      resetControlsTimer();
+                      toggleFullscreen();
+                    }}
+                    aria-label="Toàn màn hình"
+                    className="hover:text-zinc-300 hover:scale-110 active:scale-95 transition cursor-pointer"
+                  >
+                    {isFullscreen ? <Minimize className="w-5 h-5" /> : <Maximize className="w-5 h-5" />}
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      ) : activeEmbed ? (
+        /* CASE 2: IFRAME EMBED STREAMING FALLBACK */
+        <div className="relative w-full h-full flex flex-col bg-black">
+          {/* Ambient Cinema Backdrop & Loading Veil */}
+          <div
+            className={`absolute inset-0 z-10 transition-opacity duration-1000 ease-out pointer-events-none ${
+              isVideoLoaded ? 'opacity-0' : 'opacity-100'
+            }`}
+          >
+            {playingMovie.backdropUrl || playingMovie.posterUrl ? (
+              <div
+                className="absolute inset-0 bg-cover bg-center filter blur-3xl scale-110 opacity-35 brightness-50"
+                style={{
+                  backgroundImage: `url('${playingMovie.backdropUrl || playingMovie.posterUrl}')`,
+                }}
+              />
+            ) : null}
+            <div className="absolute inset-0 bg-gradient-to-t from-black via-black/80 to-black/95" />
             <div className="absolute inset-0 flex flex-col items-center justify-center p-6 text-center space-y-5 animate-in fade-in duration-500">
               <div className="relative flex items-center justify-center">
                 <div className="w-16 h-16 rounded-full bg-red-600/20 blur-xl animate-pulse" />
@@ -605,7 +1279,7 @@ export const VideoPlayerModal: React.FC = () => {
                   {playingMovie.title}
                 </h2>
                 <p className="text-sm text-red-400 font-bold uppercase tracking-wider">
-                  {currentEpisodeTitle || playingMovie.currentEpisode || 'Đang chuẩn bị phim...'}
+                  {displayEpisodeTitle}
                 </p>
                 <p className="text-xs text-zinc-400 font-medium tracking-wide pt-1">
                   Đang khởi tạo trình phát phim • Vui lòng chờ trong giây lát
@@ -614,7 +1288,7 @@ export const VideoPlayerModal: React.FC = () => {
             </div>
           </div>
 
-          {/* Top gesture & tap zone: allows user on mobile/desktop to tap or touch near top to show controls even when controls are hidden */}
+          {/* Top gesture tap zone */}
           <div
             onClick={resetControlsTimer}
             onTouchStart={resetControlsTimer}
@@ -624,14 +1298,18 @@ export const VideoPlayerModal: React.FC = () => {
 
           {/* Header Bar */}
           <div
+            onClick={(e) => e.stopPropagation()}
             className={`absolute top-0 left-0 right-0 z-30 bg-gradient-to-b from-black/95 via-black/60 to-transparent px-4 py-3 sm:px-6 sm:py-5 flex items-center justify-between text-white transition-opacity duration-300 ${
               showControls ? 'opacity-100 pointer-events-auto' : 'opacity-0 pointer-events-none'
             }`}
           >
-            {/* Left: Back button & Movie / Episode info */}
+            {/* Left: Back button & Title */}
             <div className="flex items-center gap-2.5 sm:gap-4 min-w-0 pr-2">
               <button
-                onClick={handleClose}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  handleClose();
+                }}
                 aria-label="Thoát xem phim"
                 className="flex items-center gap-1.5 sm:gap-2 px-3 py-1.5 sm:py-2 rounded-full bg-white/10 hover:bg-white/20 active:scale-95 text-white backdrop-blur-md border border-white/15 transition cursor-pointer group shrink-0"
               >
@@ -644,9 +1322,7 @@ export const VideoPlayerModal: React.FC = () => {
                   {playingMovie.title}
                 </h2>
                 <div className="flex items-center gap-2 text-[11px] sm:text-xs text-zinc-300 font-medium">
-                  {currentEpisodeTitle && (
-                    <span className="text-red-400 font-bold">{currentEpisodeTitle}</span>
-                  )}
+                  <span className="text-red-400 font-bold">{displayEpisodeTitle}</span>
                   {playingMovie.subTitle && (
                     <span className="hidden sm:inline text-zinc-400 truncate max-w-[200px]">
                       • {playingMovie.subTitle}
@@ -656,11 +1332,31 @@ export const VideoPlayerModal: React.FC = () => {
               </div>
             </div>
 
-            {/* Right: Actions (Rotate, Episodes, Fullscreen) */}
+            {/* Right: Actions */}
             <div className="flex items-center gap-2 sm:gap-3 shrink-0">
+              {/* Return to direct HLS if available */}
+              {resolvedM3u8 && (
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    resetControlsTimer();
+                    setUseIframeFallback(false);
+                  }}
+                  className="hidden md:flex items-center gap-1 px-2.5 py-1.5 rounded-full bg-red-600/80 hover:bg-red-600 text-white text-xs font-semibold transition cursor-pointer shadow-md"
+                  title="Chuyển về trình phát HLS cao cấp"
+                >
+                  <Sparkles className="w-3.5 h-3.5" />
+                  <span>Dùng HLS</span>
+                </button>
+              )}
+
               {/* 1-Tap Screen Orientation Switcher */}
               <button
-                onClick={toggleRotate}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  resetControlsTimer();
+                  toggleRotate();
+                }}
                 aria-label="Xoay màn hình"
                 className="flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 sm:py-2 rounded-full bg-white/10 hover:bg-white/20 active:scale-95 text-white backdrop-blur-md border border-white/15 transition cursor-pointer group text-xs sm:text-sm font-semibold"
                 title={isCssRotated ? 'Xoay dọc màn hình' : 'Xoay ngang màn hình'}
@@ -675,39 +1371,57 @@ export const VideoPlayerModal: React.FC = () => {
               {currentServer && currentServer.items.length > 1 && (
                 <div className="relative">
                   <button
-                    onClick={() => setShowEpisodeSelector((prev) => !prev)}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      resetControlsTimer();
+                      setShowEpisodeSelector((prev) => !prev);
+                    }}
                     aria-label="Danh sách tập"
                     className="flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 sm:py-2 rounded-full bg-white/10 hover:bg-white/20 active:scale-95 text-white backdrop-blur-md border border-white/15 transition cursor-pointer text-xs sm:text-sm font-semibold"
                   >
                     <ListVideo className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-red-500" />
                     <span className="hidden sm:inline">Chọn tập ({currentServer.items.length} tập)</span>
-                    <span className="sm:hidden">{currentEpisodeTitle || 'Tập'}</span>
+                    <span className="sm:hidden">{displayEpisodeTitle}</span>
                   </button>
 
                   {/* Dropdown list of episodes */}
                   {showEpisodeSelector && (
                     <>
                       <div
-                        className="fixed inset-0 z-40"
-                        onClick={() => setShowEpisodeSelector(false)}
+                        className="fixed inset-0 z-40 pointer-events-auto"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setShowEpisodeSelector(false);
+                        }}
                       />
-                      <div className="absolute right-0 top-full mt-2 w-72 sm:w-80 max-w-[calc(100vw-2rem)] max-h-80 overflow-y-auto bg-zinc-900/98 backdrop-blur-xl border border-zinc-700 rounded-xl p-2.5 grid grid-cols-4 gap-1.5 shadow-2xl z-50 animate-in fade-in zoom-in-95 duration-150">
-                        {currentServer.items.map((ep) => (
-                          <button
-                            key={ep.slug}
-                            onClick={() => {
-                              setPlayingEpisode(ep.embed, `Tập ${ep.name}`);
-                              setShowEpisodeSelector(false);
-                            }}
-                            className={`p-2 text-xs rounded-lg font-bold transition text-center cursor-pointer ${
-                              activeEmbed === ep.embed
-                                ? 'bg-red-600 text-white shadow-md'
-                                : 'bg-zinc-800 hover:bg-zinc-700 text-zinc-300'
-                            }`}
-                          >
-                            Tập {ep.name}
-                          </button>
-                        ))}
+                      <div
+                        onClick={(e) => e.stopPropagation()}
+                        className="absolute right-0 top-full mt-2 w-72 sm:w-80 max-w-[calc(100vw-2rem)] max-h-80 overflow-y-auto bg-zinc-900/98 backdrop-blur-xl border border-zinc-700 rounded-xl p-2.5 grid grid-cols-4 gap-1.5 shadow-2xl z-50 animate-in fade-in zoom-in-95 duration-150 pointer-events-auto"
+                      >
+                        {currentServer.items.map((ep) => {
+                          const epTitle = formatEpisodeTitle(ep.name);
+                          const isEpActive =
+                            activeEmbed === ep.embed ||
+                            formatEpisodeTitle(currentEpisodeTitle || '') === epTitle;
+                          return (
+                            <button
+                              key={ep.slug}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setPlayingEpisode(ep.embed, epTitle, ep.m3u8);
+                                setShowEpisodeSelector(false);
+                                resetControlsTimer();
+                              }}
+                              className={`p-2 text-xs rounded-lg font-bold transition text-center cursor-pointer ${
+                                isEpActive
+                                  ? 'bg-red-600 text-white shadow-md'
+                                  : 'bg-zinc-800 hover:bg-zinc-700 text-zinc-300'
+                              }`}
+                            >
+                              {epTitle}
+                            </button>
+                          );
+                        })}
                       </div>
                     </>
                   )}
@@ -716,7 +1430,11 @@ export const VideoPlayerModal: React.FC = () => {
 
               {/* Fullscreen Button */}
               <button
-                onClick={toggleFullscreen}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  resetControlsTimer();
+                  toggleFullscreen();
+                }}
                 aria-label="Toàn màn hình"
                 className="w-8 h-8 sm:w-10 sm:h-10 rounded-full bg-white/10 hover:bg-white/20 flex items-center justify-center transition cursor-pointer border border-white/10"
               >
@@ -729,7 +1447,7 @@ export const VideoPlayerModal: React.FC = () => {
             </div>
           </div>
 
-          {/* IFrame Embed Stream - Smoothly fades in when loaded */}
+          {/* IFrame Embed Stream */}
           <iframe
             src={activeEmbed}
             title={playingMovie.title}
@@ -741,8 +1459,8 @@ export const VideoPlayerModal: React.FC = () => {
             }`}
           />
         </div>
-      ) : !activeEmbed && (isLoadingDetail || playingMovie.slug) ? (
-        /* Connecting stream state with smooth fade */
+      ) : !activeEmbed && !resolvedM3u8 && (isLoadingDetail || playingMovie.slug) ? (
+        /* Connecting stream state */
         <div className="relative w-full h-full flex flex-col items-center justify-center bg-black text-white space-y-4">
           <button
             onClick={handleClose}
@@ -758,167 +1476,10 @@ export const VideoPlayerModal: React.FC = () => {
               {playingMovie.title}
             </h3>
             <p className="text-xs sm:text-sm text-zinc-400 mt-1">
-              Đang kết nối luồng phát {currentEpisodeTitle || 'tập phim'}...
+              Đang kết nối luồng phát {displayEpisodeTitle}...
             </p>
           </div>
         </div>
-      ) : playingMovie.videoUrl ? (
-        /* CASE 2: HTML5 VIDEO PLAYER (for demo / trailer) */
-        <>
-          <video
-            ref={videoRef}
-            src={playingMovie.videoUrl}
-            autoPlay
-            playsInline
-            onTimeUpdate={handleTimeUpdate}
-            onLoadedMetadata={handleLoadedMetadata}
-            onCanPlay={() => setIsVideoLoaded(true)}
-            onClick={togglePlay}
-            className={`w-full h-full object-contain cursor-pointer transition-opacity duration-700 ease-out ${
-              isVideoLoaded ? 'opacity-100' : 'opacity-0'
-            }`}
-          />
-
-          {/* Overlay UI Controls */}
-          <div
-            className={`absolute inset-0 bg-gradient-to-t from-black/80 via-transparent to-black/60 flex flex-col justify-between p-6 md:p-10 transition-opacity duration-300 pointer-events-none ${
-              showControls ? 'opacity-100 pointer-events-auto' : 'opacity-0'
-            }`}
-          >
-            {/* Top Header */}
-            <div className="flex items-center justify-between text-white w-full">
-              {/* Left: Back button & Movie / Episode info */}
-              <div className="flex items-center gap-2.5 sm:gap-4 min-w-0 pr-2">
-                <button
-                  onClick={handleClose}
-                  aria-label="Thoát xem phim"
-                  className="flex items-center gap-1.5 sm:gap-2 px-3 py-1.5 sm:py-2 rounded-full bg-white/10 hover:bg-white/20 active:scale-95 text-white backdrop-blur-md border border-white/15 transition cursor-pointer group shrink-0"
-                >
-                  <ArrowLeft className="w-4 h-4 sm:w-5 sm:h-5 text-white group-hover:-translate-x-0.5 transition-transform" />
-                  <span className="text-xs sm:text-sm font-semibold tracking-wide pr-0.5">Thoát</span>
-                </button>
-                <div className="min-w-0">
-                  <h2 className="text-xs sm:text-base md:text-lg font-bold uppercase tracking-wide truncate max-w-[140px] xs:max-w-[200px] sm:max-w-xs md:max-w-md">
-                    {playingMovie.title}
-                  </h2>
-                  {playingMovie.subTitle && (
-                    <p className="text-[11px] sm:text-xs text-zinc-300 font-medium hidden sm:block truncate max-w-[200px]">
-                      {playingMovie.subTitle}
-                    </p>
-                  )}
-                </div>
-              </div>
-
-              {/* Right: Actions */}
-              <div className="flex items-center gap-2 sm:gap-3 shrink-0">
-                <button
-                  onClick={toggleRotate}
-                  aria-label="Xoay màn hình"
-                  className="flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 sm:py-2 rounded-full bg-white/10 hover:bg-white/20 active:scale-95 text-white backdrop-blur-md border border-white/15 transition cursor-pointer group text-xs sm:text-sm font-semibold"
-                  title={isCssRotated ? 'Xoay dọc màn hình' : 'Xoay ngang màn hình'}
-                >
-                  <RotateCw className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-red-500 group-hover:rotate-45 transition-transform" />
-                  <span className="hidden xs:inline">
-                    {isCssRotated ? 'Xoay dọc' : 'Xoay ngang'}
-                  </span>
-                </button>
-              </div>
-            </div>
-
-            {/* Bottom Controls */}
-            <div className="space-y-3">
-              {/* Timeline Scrubber */}
-              <div className="flex items-center gap-3">
-                <span className="text-xs text-zinc-300 font-medium w-12 text-right">
-                  {formatTime(currentTime)}
-                </span>
-                <input
-                  type="range"
-                  min={0}
-                  max={duration || 100}
-                  value={currentTime}
-                  onChange={handleSeek}
-                  className="flex-1 h-1 bg-zinc-700 accent-red-600 rounded-lg cursor-pointer hover:h-2 transition-all"
-                />
-                <span className="text-xs text-zinc-300 font-medium w-12">
-                  {formatTime(Math.max(0, duration - currentTime))}
-                </span>
-              </div>
-
-              {/* Control Buttons */}
-              <div className="flex items-center justify-between text-white">
-                <div className="flex items-center gap-4 sm:gap-6">
-                  {/* Play / Pause */}
-                  <button
-                    onClick={togglePlay}
-                    aria-label={isPlaying ? 'Tạm dừng' : 'Phát'}
-                    className="hover:text-red-500 transition cursor-pointer"
-                  >
-                    {isPlaying ? <Pause className="w-6 h-6 fill-white" /> : <Play className="w-6 h-6 fill-white" />}
-                  </button>
-
-                  {/* 10s backward */}
-                  <button
-                    onClick={() => skipTime(-10)}
-                    aria-label="Tua lại 10 giây"
-                    className="hover:text-zinc-300 transition cursor-pointer"
-                  >
-                    <RotateCcw className="w-5 h-5" />
-                  </button>
-
-                  {/* 10s forward */}
-                  <button
-                    onClick={() => skipTime(10)}
-                    aria-label="Tua tới 10 giây"
-                    className="hover:text-zinc-300 transition cursor-pointer"
-                  >
-                    <RotateCw className="w-5 h-5" />
-                  </button>
-
-                  {/* Volume control */}
-                  <div className="flex items-center gap-2 group/vol">
-                    <button onClick={toggleMute} aria-label="Âm lượng" className="cursor-pointer">
-                      {isMuted || volume === 0 ? (
-                        <VolumeX className="w-5 h-5" />
-                      ) : (
-                        <Volume2 className="w-5 h-5" />
-                      )}
-                    </button>
-                    <input
-                      type="range"
-                      min={0}
-                      max={1}
-                      step={0.05}
-                      value={isMuted ? 0 : volume}
-                      onChange={handleVolumeChange}
-                      className="w-16 sm:w-20 h-1 bg-zinc-600 accent-white rounded cursor-pointer"
-                    />
-                  </div>
-                </div>
-
-                <div className="flex items-center gap-4 sm:gap-5">
-                  {/* Audio & Subtitles */}
-                  <button
-                    title="Phụ đề & Âm thanh"
-                    className="hover:text-zinc-300 transition flex items-center gap-1.5 text-xs font-semibold cursor-pointer"
-                  >
-                    <MessageSquare className="w-5 h-5" />
-                    <span className="hidden sm:inline">Tiếng Việt</span>
-                  </button>
-
-                  {/* Fullscreen */}
-                  <button
-                    onClick={toggleFullscreen}
-                    aria-label="Toàn màn hình"
-                    className="hover:text-zinc-300 transition cursor-pointer"
-                  >
-                    {isFullscreen ? <Minimize className="w-5 h-5" /> : <Maximize className="w-5 h-5" />}
-                  </button>
-                </div>
-              </div>
-            </div>
-          </div>
-        </>
       ) : (
         /* Empty / Unavailable Stream Fallback */
         <div className="relative w-full h-full flex flex-col items-center justify-center bg-black text-white p-6 space-y-4 text-center">

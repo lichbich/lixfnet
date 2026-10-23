@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { fetchTMDBLogo } from '@/services/logoService';
+import { extractYoutubeKey } from '@/services/movieApi';
 
 const TMDB_API_KEY =
   process.env.TMDB_API_KEY || '58dba4066f4f36e49e5e769304442088';
@@ -264,6 +265,7 @@ async function searchTMDBTrailer(
 
 export async function GET(request: NextRequest) {
   const { searchParams } = new URL(request.url);
+  const trailerUrlParam = searchParams.get('trailerUrl') || '';
   const tmdbIdParam = searchParams.get('tmdbId') || '';
   const mediaTypeParam = searchParams.get('mediaType') || '';
   const title = searchParams.get('title') || '';
@@ -301,8 +303,42 @@ export async function GET(request: NextRequest) {
   let tmdbId: number | undefined = parsedTmdbId;
   let source = 'none';
 
-  // 2. Direct TMDB ID lookup (100% accurate when available from API)
-  if (parsedTmdbId && !isNaN(parsedTmdbId)) {
+  // 2. Direct trailer URL parameter passed from client (0ms instant resolution)
+  if (trailerUrlParam) {
+    const directKey = extractYoutubeKey(trailerUrlParam);
+    if (directKey) {
+      youtubeKey = directKey;
+      source = 'param_trailer_url';
+    }
+  }
+
+  // 3. Direct KKPhim catalog trailer lookup by slug (100% native from streaming provider)
+  if (!youtubeKey && slug) {
+    try {
+      const phimRes = await fetch(`https://phimapi.com/phim/${slug}`, {
+        next: { revalidate: 86400 },
+      });
+      if (phimRes.ok) {
+        const phimData = await phimRes.json();
+        const phimItem = phimData.movie || phimData.data?.item;
+        if (phimItem?.trailer_url) {
+          const directKey = extractYoutubeKey(phimItem.trailer_url);
+          if (directKey) {
+            youtubeKey = directKey;
+            source = 'phimapi_trailer';
+          }
+        }
+        if (!tmdbId && phimItem?.tmdb?.id) {
+          tmdbId = parseInt(String(phimItem.tmdb.id), 10);
+        }
+      }
+    } catch (err) {
+      // Soft fail
+    }
+  }
+
+  // 4. Direct TMDB ID lookup (fallback if not resolved from KKPhim)
+  if (!youtubeKey && parsedTmdbId && !isNaN(parsedTmdbId)) {
     const mediaType = mediaTypeParam === 'tv' ? 'tv' : 'movie';
     const videoRes = await fetchVideosForTMDBItem(parsedTmdbId, mediaType);
     if (videoRes && videoRes.key) {
@@ -316,7 +352,7 @@ export async function GET(request: NextRequest) {
     }
   }
 
-  // 3. Fallback to TMDB Search if tmdbId is not provided or not found
+  // 5. Fallback to TMDB Search if tmdbId is not provided or not found
   if (!youtubeKey && source !== 'tmdb_id_no_videos') {
     // A. For Vietnamese titles, search Vietnamese title first (e.g. "Thỏ Ơi!!", "Lật Mặt 7", "Bố Già")
     if (hasVietnameseChars(title) && title.trim()) {
