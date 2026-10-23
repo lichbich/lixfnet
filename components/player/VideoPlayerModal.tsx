@@ -65,19 +65,69 @@ export const VideoPlayerModal: React.FC = () => {
 
   // Active stream and server references
   const activeEmbed = currentEpisodeEmbed || playingMovie?.embedUrl;
-  const currentServer = playingMovie?.episodesServers?.[0];
+
+  const currentServer = useMemo(() => {
+    if (!playingMovie?.episodesServers || playingMovie.episodesServers.length === 0) return null;
+
+    // 1. If an active embed or episode title matches a specific server, pick that server
+    if (activeEmbed || currentEpisodeTitle) {
+      const formattedCur = formatEpisodeTitle(currentEpisodeTitle || '');
+      for (const srv of playingMovie.episodesServers) {
+        const found = srv.items?.some(
+          (ep) =>
+            (activeEmbed && ep.embed === activeEmbed) ||
+            formatEpisodeTitle(ep.name) === formattedCur
+        );
+        if (found) return srv;
+      }
+    }
+
+    // 2. Otherwise prioritize server that has direct m3u8 streams
+    const serverWithM3u8 = playingMovie.episodesServers.find((srv) =>
+      srv.items?.some((ep) => ep.m3u8 && ep.m3u8.trim().length > 0)
+    );
+    if (serverWithM3u8) return serverWithM3u8;
+
+    return playingMovie.episodesServers[0];
+  }, [playingMovie?.episodesServers, activeEmbed, currentEpisodeTitle]);
 
   const resolvedM3u8 = (() => {
-    if (currentEpisodeM3u8) return currentEpisodeM3u8;
+    if (currentEpisodeM3u8 && currentEpisodeM3u8.trim()) return currentEpisodeM3u8.trim();
+
+    // Search in current server items
     if (currentServer?.items) {
       const match = currentServer.items.find(
         (ep) =>
-          ep.embed === activeEmbed ||
+          (activeEmbed && ep.embed === activeEmbed) ||
           formatEpisodeTitle(ep.name) === formatEpisodeTitle(currentEpisodeTitle || '')
       );
-      if (match?.m3u8) return match.m3u8;
+      if (match?.m3u8 && match.m3u8.trim()) return match.m3u8.trim();
     }
-    return playingMovie?.m3u8Url || null;
+
+    // Search across any server in playingMovie
+    if (playingMovie?.episodesServers) {
+      for (const srv of playingMovie.episodesServers) {
+        const match = srv.items?.find(
+          (ep) =>
+            (activeEmbed && ep.embed === activeEmbed) ||
+            formatEpisodeTitle(ep.name) === formatEpisodeTitle(currentEpisodeTitle || '')
+        );
+        if (match?.m3u8 && match.m3u8.trim()) return match.m3u8.trim();
+      }
+    }
+
+    // ONLY fallback to playingMovie.m3u8Url if it's a single movie or Episode 1
+    const isMovieOrEp1 =
+      playingMovie?.type === 'movie' ||
+      !currentEpisodeTitle ||
+      formatEpisodeTitle(currentEpisodeTitle) === 'Tập 1' ||
+      formatEpisodeTitle(currentEpisodeTitle) === 'Tập 01';
+
+    if (isMovieOrEp1 && playingMovie?.m3u8Url) {
+      return playingMovie.m3u8Url;
+    }
+
+    return null;
   })();
 
   const isDirectHls = Boolean(resolvedM3u8 && !useIframeFallback);
@@ -345,8 +395,8 @@ export const VideoPlayerModal: React.FC = () => {
 
     const movieKey = playingMovie.slug || playingMovie.id;
     const currentEp = formatEpisodeTitle(currentEpisodeTitle || playingMovie.currentEpisode || 'Tập 1');
-    const epProg = getEpisodeProgress(movieKey, currentEp);
-    const movieProg = getWatchProgress(movieKey);
+    const epProg = getEpisodeProgress(movieKey, currentEp, playingMovie);
+    const movieProg = getWatchProgress(movieKey, playingMovie);
 
     const initialSecs =
       epProg?.currentTime ||
@@ -362,15 +412,17 @@ export const VideoPlayerModal: React.FC = () => {
       ? 45 * 60
       : 105 * 60;
 
-    // Immediately record current movie & episode in watch progress
-    updateWatchProgress(
-      playingMovie,
-      initialSecs,
-      defaultSecs,
-      currentEp,
-      activeEmbed || playingMovie.embedUrl,
-      resolvedM3u8 || playingMovie.m3u8Url
-    );
+    // Only update progress if initialSecs > 0 to avoid resetting cloud progress to 0 on initial mount
+    if (initialSecs > 0) {
+      updateWatchProgress(
+        playingMovie,
+        initialSecs,
+        defaultSecs,
+        currentEp,
+        activeEmbed || playingMovie.embedUrl,
+        resolvedM3u8 || playingMovie.m3u8Url
+      );
+    }
 
     // Show resume toast notification if watched more than 5 seconds
     if (initialSecs > 5) {
@@ -531,7 +583,7 @@ export const VideoPlayerModal: React.FC = () => {
     if (playingMovie && !activeEmbed && !resolvedM3u8 && playingMovie.slug) {
       let isCancelled = false;
       const key = playingMovie.slug || playingMovie.id;
-      const wp = getWatchProgress(key);
+      const wp = getWatchProgress(key, playingMovie);
 
       if (wp?.episodeEmbed || wp?.episodeM3u8) {
         setPlayingEpisode(wp.episodeEmbed || '', wp.episodeTitle || 'Tập 1', wp.episodeM3u8);

@@ -16,6 +16,7 @@ import { RatingBadge, QualityBadge, Top10Badge } from '@/components/ui/Badge';
 import { NetflixRibbonN } from '@/components/ui/NetflixLogo';
 import { clientLogoCache } from '@/services/logoService';
 import { formatEpisodeTitle } from '@/services/movieApi';
+import { getCanonicalMovieId } from '@/lib/movieUtils';
 
 export const HoverPopoutCard: React.FC = () => {
   const {
@@ -70,11 +71,19 @@ export const HoverPopoutCard: React.FC = () => {
       setActiveMovie(hoveredMovie);
       setActiveRect(hoverRect);
 
-      // Check client logo cache synchronously
+      // Check client logo cache synchronously across all candidate keys
+      const canonicalId = getCanonicalMovieId(hoveredMovie);
       const movieKey = hoveredMovie.slug || hoveredMovie.id;
-      const cached = clientLogoCache.get(movieKey) || hoveredMovie.logoUrl || null;
+      const cached =
+        hoveredMovie.logoUrl ||
+        clientLogoCache.get(canonicalId) ||
+        (hoveredMovie.slug ? clientLogoCache.get(hoveredMovie.slug) : null) ||
+        (hoveredMovie.id ? clientLogoCache.get(hoveredMovie.id) : null) ||
+        (hoveredMovie.tmdbId ? clientLogoCache.get(`tmdb_${hoveredMovie.tmdbId}`) : null) ||
+        (hoveredMovie.tmdb?.id ? clientLogoCache.get(`tmdb_${hoveredMovie.tmdb.id}`) : null) ||
+        null;
       setLogoUrl(cached);
-      setIsLogoLoaded(false);
+      setIsLogoLoaded(Boolean(cached));
 
       if (isSwitching) {
         setIsOpen(true);
@@ -167,27 +176,52 @@ export const HoverPopoutCard: React.FC = () => {
     }, 1120);
 
     // 1. Separate reliable logo resolution with multi-level caching
+    const canonicalId = getCanonicalMovieId(activeMovie);
     const movieKey = activeMovie.slug || activeMovie.id;
-    const existingCached = clientLogoCache.get(movieKey) || activeMovie.logoUrl;
+    const existingCached =
+      activeMovie.logoUrl ||
+      clientLogoCache.get(canonicalId) ||
+      (activeMovie.slug ? clientLogoCache.get(activeMovie.slug) : null) ||
+      (activeMovie.id ? clientLogoCache.get(activeMovie.id) : null) ||
+      (activeMovie.tmdbId ? clientLogoCache.get(`tmdb_${activeMovie.tmdbId}`) : null) ||
+      (activeMovie.tmdb?.id ? clientLogoCache.get(`tmdb_${activeMovie.tmdb.id}`) : null) ||
+      null;
+
+    const saveResolvedLogo = (url: string) => {
+      setLogoUrl(url);
+      setIsLogoLoaded(true);
+      clientLogoCache.set(canonicalId, url);
+      if (movieKey) clientLogoCache.set(movieKey, url);
+      if (activeMovie.slug) clientLogoCache.set(activeMovie.slug, url);
+      if (activeMovie.id) clientLogoCache.set(activeMovie.id, url);
+      if (activeMovie.tmdbId) clientLogoCache.set(`tmdb_${activeMovie.tmdbId}`, url);
+      if (activeMovie.tmdb?.id) clientLogoCache.set(`tmdb_${activeMovie.tmdb.id}`, url);
+      try {
+        sessionStorage.setItem(`netlix_logo_v3_${movieKey}`, url);
+        sessionStorage.setItem(`netlix_logo_v3_${canonicalId}`, url);
+      } catch {}
+    };
+
     if (existingCached) {
-      setLogoUrl(existingCached);
+      saveResolvedLogo(existingCached);
     } else {
       let sessionLogo: string | null = null;
       try {
-        sessionLogo = sessionStorage.getItem(`netlix_logo_v3_${movieKey}`);
+        sessionLogo =
+          sessionStorage.getItem(`netlix_logo_v3_${movieKey}`) ||
+          sessionStorage.getItem(`netlix_logo_v3_${canonicalId}`);
       } catch {}
 
       if (sessionLogo && sessionLogo !== 'none') {
-        setLogoUrl(sessionLogo);
-        clientLogoCache.set(movieKey, sessionLogo);
-      } else if (sessionLogo !== 'none') {
+        saveResolvedLogo(sessionLogo);
+      } else {
         // Eagerly resolve logo from TMDB
         const qTitle = encodeURIComponent(activeMovie.title || '');
         const qSub = encodeURIComponent(activeMovie.subTitle || '');
         const qSlug = encodeURIComponent(movieSlug);
         const qYear = encodeURIComponent(activeMovie.year ? String(activeMovie.year) : '');
-        const qTmdbId = encodeURIComponent(activeMovie.tmdb?.id ? String(activeMovie.tmdb.id) : '');
-        const qMediaType = encodeURIComponent(activeMovie.tmdb?.type || '');
+        const qTmdbId = encodeURIComponent(activeMovie.tmdb?.id ? String(activeMovie.tmdb.id) : (activeMovie.tmdbId ? String(activeMovie.tmdbId) : ''));
+        const qMediaType = encodeURIComponent(activeMovie.tmdb?.type || (activeMovie.type === 'series' ? 'tv' : 'movie'));
 
         fetch(
           `/api/logo?title=${qTitle}&subTitle=${qSub}&slug=${qSlug}&year=${qYear}&tmdbId=${qTmdbId}&mediaType=${qMediaType}`
@@ -196,15 +230,7 @@ export const HoverPopoutCard: React.FC = () => {
           .then((data) => {
             if (isCancelled) return;
             if (data.logoUrl) {
-              setLogoUrl(data.logoUrl);
-              clientLogoCache.set(movieKey, data.logoUrl);
-              try {
-                sessionStorage.setItem(`netlix_logo_v3_${movieKey}`, data.logoUrl);
-              } catch {}
-            } else {
-              try {
-                sessionStorage.setItem(`netlix_logo_v3_${movieKey}`, 'none');
-              } catch {}
+              saveResolvedLogo(data.logoUrl);
             }
           })
           .catch(() => {});
@@ -231,8 +257,8 @@ export const HoverPopoutCard: React.FC = () => {
       const qSub = encodeURIComponent(activeMovie.subTitle || '');
       const qSlug = encodeURIComponent(movieSlug);
       const qYear = encodeURIComponent(activeMovie.year ? String(activeMovie.year) : '');
-      const qTmdbId = encodeURIComponent(activeMovie.tmdb?.id ? String(activeMovie.tmdb.id) : '');
-      const qMediaType = encodeURIComponent(activeMovie.tmdb?.type || '');
+      const qTmdbId = encodeURIComponent(activeMovie.tmdb?.id ? String(activeMovie.tmdb.id) : (activeMovie.tmdbId ? String(activeMovie.tmdbId) : ''));
+      const qMediaType = encodeURIComponent(activeMovie.tmdb?.type || (activeMovie.type === 'series' ? 'tv' : 'movie'));
       const qTrailerUrl = encodeURIComponent(activeMovie.trailerUrl || '');
 
       fetch(
@@ -242,11 +268,7 @@ export const HoverPopoutCard: React.FC = () => {
         .then((data) => {
           if (isCancelled) return;
           if (data.logoUrl) {
-            setLogoUrl(data.logoUrl);
-            clientLogoCache.set(movieKey, data.logoUrl);
-            try {
-              sessionStorage.setItem(`netlix_logo_v3_${movieKey}`, data.logoUrl);
-            } catch {}
+            saveResolvedLogo(data.logoUrl);
           }
           if (data.youtubeKey) {
             setTrailerKey(data.youtubeKey);
@@ -391,8 +413,8 @@ export const HoverPopoutCard: React.FC = () => {
 
   if (!activeMovie || !activeRect) return null;
 
-  const inList = isInMyList(activeMovie.id);
-  const watchProgress = getWatchProgress(activeMovie.slug || activeMovie.id);
+  const inList = isInMyList(activeMovie.id, activeMovie);
+  const watchProgress = getWatchProgress(activeMovie.slug || activeMovie.id, activeMovie);
 
   // Responsive width calculation: blooms out smoothly and proportionally to the base card
   const targetWidth = Math.round(activeRect.width * 1.16);
@@ -448,7 +470,7 @@ export const HoverPopoutCard: React.FC = () => {
   const handleOpenDetail = (e: React.MouseEvent) => {
     e.stopPropagation();
     closeHoverPopoutNow();
-    openModal(activeMovie);
+    openModal({ ...activeMovie, logoUrl: logoUrl || activeMovie.logoUrl });
   };
 
   const mainImage = activeMovie.backdropUrl || activeMovie.posterUrl;
@@ -615,6 +637,11 @@ export const HoverPopoutCard: React.FC = () => {
             {/* Title logo: gently blooms in only after image is fully decoded */}
             {logoUrl && (
               <img
+                ref={(img) => {
+                  if (img && img.complete && img.naturalWidth > 0 && !isLogoLoaded) {
+                    setIsLogoLoaded(true);
+                  }
+                }}
                 src={logoUrl}
                 alt={activeMovie.title}
                 onLoad={() => setIsLogoLoaded(true)}

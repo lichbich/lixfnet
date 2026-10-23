@@ -11,6 +11,7 @@ import {
   EpisodeServer,
   EpisodeServerItem,
 } from '@/types';
+import { cleanMovieDescription } from '@/lib/movieUtils';
 
 export const API_BASE_URL = 'https://phimapi.com';
 export const CDN_IMAGE_BASE = 'https://phimimg.com';
@@ -404,7 +405,7 @@ export function mapKKPhimToMovie(
           number: cleanNumber || ep.name,
           title: formatEpisodeTitle(ep.name),
           duration: `${durationMinutes} phút`,
-          description: (item.content || item.description || '').slice(0, 150) ? `${(item.content || item.description || '').slice(0, 150)}...` : '',
+          description: cleanMovieDescription(item.content || item.description).slice(0, 150) ? `${cleanMovieDescription(item.content || item.description).slice(0, 150)}...` : '',
           thumbnail: backdropUrl,
           embedUrl: ep.embed,
           m3u8Url: ep.m3u8,
@@ -505,8 +506,11 @@ export function mapKKPhimToMovie(
   const rawTrailerUrl = item.trailer_url || (item as any).trailerUrl || undefined;
   const parsedTrailerKey = extractYoutubeKey(rawTrailerUrl) || undefined;
 
+  const fixedId = (item as any)._id || item.id || item.slug || `movie-${Math.random()}`;
+
   return {
-    id: item.slug || `movie-${Math.random()}`,
+    id: fixedId,
+    _id: (item as any)._id,
     slug: item.slug,
     title: item.name,
     subTitle: item.origin_name || item.original_name,
@@ -522,7 +526,7 @@ export function mapKKPhimToMovie(
     matchRate,
     quality: qualityTag.includes('4K') ? '4K Ultra HD' : 'HD',
     audioTags: langTag ? [langTag, '5.1'] : ['5.1'],
-    description: item.content || item.description || 'Không có mô tả chi tiết cho phim này.',
+    description: cleanMovieDescription(item.content || item.description) || 'Không có mô tả chi tiết cho phim này.',
     heroTagline: `${isSeries ? 'Series' : 'Phim'} • ${genres[0] || 'Phổ biến'} • ${parsedYear} • ${qualityTag}`,
     backdropUrl,
     posterUrl,

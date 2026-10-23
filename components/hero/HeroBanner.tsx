@@ -886,7 +886,7 @@ export const HeroBanner: React.FC<HeroBannerProps> = ({ movie, badgeText }) => {
             {/* Action Buttons */}
             <div className="flex items-center gap-3">
               {(() => {
-                const watchProgress = movie ? getWatchProgress(movie.slug || movie.id) : undefined;
+                const watchProgress = movie ? getWatchProgress(movie.slug || movie.id, movie) : undefined;
                 return (
                   <button
                     onClick={() => {

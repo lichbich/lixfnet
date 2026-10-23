@@ -7,6 +7,7 @@ import { SearchResults } from '@/components/search/SearchResults';
 import { useNetflix } from '@/context/NetflixContext';
 import { Clock, Bookmark, Sparkles, Film } from 'lucide-react';
 import Link from 'next/link';
+import { getCanonicalMovieId } from '@/lib/movieUtils';
 
 type TabType = 'all' | 'watching' | 'saved';
 
@@ -160,11 +161,14 @@ export default function MyListPage() {
               </div>
 
               <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-3 sm:gap-4">
-                {continueWatchingList.map((movie) => (
-                  <div key={`watching-${movie.slug || movie.id}`} className="w-full">
-                    <ContinueWatchingCard movie={movie} fillWidth />
-                  </div>
-                ))}
+                {continueWatchingList.map((movie) => {
+                  const keyId = getCanonicalMovieId(movie);
+                  return (
+                    <div key={`watching-${keyId}`} className="w-full">
+                      <ContinueWatchingCard movie={movie} fillWidth />
+                    </div>
+                  );
+                })}
               </div>
             </section>
           )}
@@ -186,11 +190,14 @@ export default function MyListPage() {
               </div>
 
               <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-3 sm:gap-4">
-                {myList.map((movie) => (
-                  <div key={`saved-${movie.slug || movie.id}`} className="w-full">
-                    <MovieCard movie={movie} fillWidth />
-                  </div>
-                ))}
+                {myList.map((movie) => {
+                  const keyId = getCanonicalMovieId(movie);
+                  return (
+                    <div key={`saved-${keyId}`} className="w-full">
+                      <MovieCard movie={movie} fillWidth />
+                    </div>
+                  );
+                })}
               </div>
             </section>
           )}

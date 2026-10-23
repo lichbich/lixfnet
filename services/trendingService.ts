@@ -527,7 +527,7 @@ function scoreCandidate(
  * Searches KKPhim by TMDB ID or keyword candidates with strict cross-validation.
  * Returns only high-confidence matching items (score >= 60).
  */
-export async function findNguonCMatch(
+export async function findPhimApiMatch(
   title: string,
   originalTitle?: string,
   extra?: { year?: number; type?: 'movie' | 'series'; tmdbId?: number | string }
@@ -662,6 +662,8 @@ export async function findNguonCMatch(
   matchCache.set(cacheKey, { result: finalResult, timestamp: Date.now() });
   return finalResult;
 }
+
+export const findNguonCMatch = findPhimApiMatch;
 
 /**
  * Convert TMDB item into application Movie object with accurate NguonC matching

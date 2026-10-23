@@ -19,6 +19,7 @@ import { useNetflix } from '@/context/NetflixContext';
 import { getSimilarMovies, formatEpisodeTitle } from '@/services/movieApi';
 import { getMovieCollection, MovieCollection } from '@/services/collectionService';
 import { clientLogoCache } from '@/services/logoService';
+import { getCanonicalMovieId, isSameMovie, cleanMovieDescription } from '@/lib/movieUtils';
 import { Movie } from '@/types';
 
 /** Cleanly format episode titles, e.g. "04" -> "Tập 04", "Tập Tập 04" -> "Tập 04", "Full" -> "Bản Full" */
@@ -65,15 +66,16 @@ export const MovieModal: React.FC = () => {
   const [isTrailerReady, setIsTrailerReady] = useState<boolean>(false);
   const [logoUrl, setLogoUrl] = useState<string | null>(selectedMovie?.logoUrl || null);
   const [isLogoLoaded, setIsLogoLoaded] = useState<boolean>(false);
-  const currentMovieKeyRef = useRef<string | null>(null);
+  const currentMovieRef = useRef<Movie | null>(null);
   const idleTimerRef = useRef<NodeJS.Timeout | null>(null);
   const iframeRef = useRef<HTMLIFrameElement>(null);
 
   useEffect(() => {
     if (selectedMovie) {
+      const canonicalId = getCanonicalMovieId(selectedMovie);
       const movieKey = selectedMovie.slug || selectedMovie.id;
-      const isDifferentMovie = currentMovieKeyRef.current !== movieKey;
-      currentMovieKeyRef.current = movieKey;
+      const isDifferentMovie = !currentMovieRef.current || !isSameMovie(currentMovieRef.current, selectedMovie);
+      currentMovieRef.current = selectedMovie;
 
       if (exitTimerRef.current) {
         clearTimeout(exitTimerRef.current);
@@ -85,26 +87,39 @@ export const MovieModal: React.FC = () => {
       // Only re-initialize logo if switching to a totally new movie
       if (isDifferentMovie) {
         setIsLogoLoaded(false);
-        if (selectedMovie.logoUrl) {
-          setLogoUrl(selectedMovie.logoUrl);
-          clientLogoCache.set(movieKey, selectedMovie.logoUrl);
-          try {
-            sessionStorage.setItem(`netlix_logo_v3_${movieKey}`, selectedMovie.logoUrl);
-          } catch {}
-        } else {
-          const cached = clientLogoCache.get(movieKey);
-          if (cached) {
-            setLogoUrl(cached);
-          } else {
-            let sessionLogo: string | null = null;
+
+        // Check selectedMovie, clientLogoCache across all candidate keys, and sessionStorage
+        const existingLogo =
+          selectedMovie.logoUrl ||
+          clientLogoCache.get(canonicalId) ||
+          (selectedMovie.slug ? clientLogoCache.get(selectedMovie.slug) : null) ||
+          (selectedMovie.id ? clientLogoCache.get(selectedMovie.id) : null) ||
+          (selectedMovie.tmdbId ? clientLogoCache.get(`tmdb_${selectedMovie.tmdbId}`) : null) ||
+          (selectedMovie.tmdb?.id ? clientLogoCache.get(`tmdb_${selectedMovie.tmdb.id}`) : null) ||
+          (() => {
             try {
-              sessionLogo = sessionStorage.getItem(`netlix_logo_v3_${movieKey}`);
+              const keys = [movieKey, canonicalId, selectedMovie.slug, selectedMovie.id].filter(Boolean) as string[];
+              for (const k of keys) {
+                const s = sessionStorage.getItem(`netlix_logo_v3_${k}`);
+                if (s && s !== 'none') return s;
+              }
             } catch {}
-            setLogoUrl(sessionLogo && sessionLogo !== 'none' ? sessionLogo : null);
-          }
+            return null;
+          })();
+
+        if (existingLogo) {
+          setLogoUrl(existingLogo);
+          setIsLogoLoaded(true);
+          clientLogoCache.set(canonicalId, existingLogo);
+          if (movieKey) clientLogoCache.set(movieKey, existingLogo);
+          if (selectedMovie.slug) clientLogoCache.set(selectedMovie.slug, existingLogo);
+          if (selectedMovie.id) clientLogoCache.set(selectedMovie.id, existingLogo);
+        } else {
+          setLogoUrl(null);
         }
       } else if (selectedMovie.logoUrl && logoUrl !== selectedMovie.logoUrl) {
         setLogoUrl(selectedMovie.logoUrl);
+        setIsLogoLoaded(true);
       }
 
       // Double rAF ensures smooth CSS bloom transition
@@ -114,7 +129,7 @@ export const MovieModal: React.FC = () => {
         });
       });
     } else if (isOpen) {
-      currentMovieKeyRef.current = null;
+      currentMovieRef.current = null;
       setIsOpen(false);
       exitTimerRef.current = setTimeout(() => {
         setDisplayedMovie(null);
@@ -207,13 +222,14 @@ export const MovieModal: React.FC = () => {
     }
 
     // Proactively fetch TMDB logo if not already present on movie object
-    if (!displayedMovie.logoUrl) {
+    if (!logoUrl && !displayedMovie.logoUrl) {
+      const canonicalId = getCanonicalMovieId(displayedMovie);
       const qTitle = encodeURIComponent(displayedMovie.title || '');
       const qSub = encodeURIComponent(displayedMovie.subTitle || '');
       const qSlug = encodeURIComponent(movieSlug);
       const qYear = encodeURIComponent(displayedMovie.year ? String(displayedMovie.year) : '');
-      const qTmdbId = encodeURIComponent(displayedMovie.tmdb?.id ? String(displayedMovie.tmdb.id) : '');
-      const qMediaType = encodeURIComponent(displayedMovie.tmdb?.type || '');
+      const qTmdbId = encodeURIComponent(displayedMovie.tmdb?.id ? String(displayedMovie.tmdb.id) : (displayedMovie.tmdbId ? String(displayedMovie.tmdbId) : ''));
+      const qMediaType = encodeURIComponent(displayedMovie.tmdb?.type || (displayedMovie.type === 'series' ? 'tv' : 'movie'));
 
       fetch(
         `/api/logo?title=${qTitle}&subTitle=${qSub}&slug=${qSlug}&year=${qYear}&tmdbId=${qTmdbId}&mediaType=${qMediaType}`
@@ -222,18 +238,19 @@ export const MovieModal: React.FC = () => {
         .then((data) => {
           if (!isCancelled && data.logoUrl) {
             setLogoUrl(data.logoUrl);
+            setIsLogoLoaded(true);
+            clientLogoCache.set(canonicalId, data.logoUrl);
+            if (movieSlug) clientLogoCache.set(movieSlug, data.logoUrl);
             try {
               sessionStorage.setItem(`netlix_logo_v3_${movieSlug}`, data.logoUrl);
-            } catch {}
-          } else if (!isCancelled) {
-            try {
-              sessionStorage.setItem(`netlix_logo_v3_${movieSlug}`, 'none');
+              sessionStorage.setItem(`netlix_logo_v3_${canonicalId}`, data.logoUrl);
             } catch {}
           }
         })
         .catch(() => {});
-    } else {
+    } else if (displayedMovie.logoUrl && displayedMovie.logoUrl !== logoUrl) {
       setLogoUrl(displayedMovie.logoUrl);
+      setIsLogoLoaded(true);
     }
 
     return () => {
@@ -243,7 +260,7 @@ export const MovieModal: React.FC = () => {
         idleTimerRef.current = null;
       }
     };
-  }, [displayedMovie?.id, isOpen]);
+  }, [displayedMovie?.id, displayedMovie?.slug, isOpen]);
 
   // Sync mute/unmute and volume state with modal trailer iframe
   useEffect(() => {
@@ -488,7 +505,7 @@ export const MovieModal: React.FC = () => {
       return;
     }
     const movieKey = displayedMovie.slug || displayedMovie.id;
-    const wp = getWatchProgress(movieKey);
+    const wp = getWatchProgress(movieKey, displayedMovie);
     const currentEpIndex = items.findIndex((ep) => {
       const epLabel = formatEpisodeLabel(ep.name);
       const wpLabel = wp?.episodeTitle ? formatEpisodeLabel(wp.episodeTitle) : '';
@@ -555,8 +572,8 @@ export const MovieModal: React.FC = () => {
 
   const movie = displayedMovie;
   const movieKey = movie.slug || movie.id;
-  const watchProgress = getWatchProgress(movieKey);
-  const inList = isInMyList(movie.id);
+  const watchProgress = getWatchProgress(movieKey, movie);
+  const inList = isInMyList(movie.id, movie);
 
   // Dynamic real duration for movie & episodes
   const epDurationMinutes =
@@ -807,6 +824,11 @@ export const MovieModal: React.FC = () => {
                   }`}
                 >
                   <img
+                    ref={(img) => {
+                      if (img && img.complete && img.naturalWidth > 0 && !isLogoLoaded) {
+                        setIsLogoLoaded(true);
+                      }
+                    }}
                     src={logoUrl}
                     alt={movie.title}
                     onLoad={() => setIsLogoLoaded(true)}
@@ -947,7 +969,7 @@ export const MovieModal: React.FC = () => {
               )}
 
               <p className="text-sm sm:text-base text-zinc-200 leading-relaxed font-normal">
-                {movie.description}
+                {cleanMovieDescription(movie.description)}
               </p>
             </div>
 
@@ -1189,7 +1211,7 @@ export const MovieModal: React.FC = () => {
               {/* Episodes Grid with Individual Progress Tracking */}
               <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-3 sm:gap-3.5">
                 {visibleEpisodes.map((ep) => {
-                  const epProg = getEpisodeProgress(movieKey, ep.name);
+                  const epProg = getEpisodeProgress(movieKey, ep.name, movie);
                   const epLabel = formatEpisodeLabel(ep.name);
                   const wpLabel = watchProgress?.episodeTitle ? formatEpisodeLabel(watchProgress.episodeTitle) : '';
                   const isCurrent =
@@ -1329,7 +1351,7 @@ export const MovieModal: React.FC = () => {
 
                 <div className="space-y-3">
                   {currentSeasonData?.episodes.map((ep) => {
-                    const epProg = getEpisodeProgress(movieKey, ep.number.toString());
+                    const epProg = getEpisodeProgress(movieKey, ep.number.toString(), movie);
                     const isCurrent =
                       Boolean(watchProgress?.episodeTitle) &&
                       (watchProgress?.episodeTitle === `Tập ${ep.number}` ||
@@ -1378,7 +1400,7 @@ export const MovieModal: React.FC = () => {
                           </div>
                           {ep.description && (
                             <p className="text-xs text-zinc-400 mt-1 line-clamp-2 leading-relaxed">
-                              {ep.description}
+                              {cleanMovieDescription(ep.description)}
                             </p>
                           )}
                         </div>
@@ -1517,9 +1539,9 @@ export const MovieModal: React.FC = () => {
                                 toggleMyList(colMovie);
                               }}
                               className="w-7 h-7 rounded-full border border-white/20 hover:border-white flex items-center justify-center text-white shrink-0 hover:bg-white/10 transition"
-                              title={isInMyList(colMovie.id) ? 'Xóa khỏi danh sách' : 'Thêm vào danh sách'}
+                              title={isInMyList(colMovie.id, colMovie) ? 'Xóa khỏi danh sách' : 'Thêm vào danh sách'}
                             >
-                              {isInMyList(colMovie.id) ? (
+                              {isInMyList(colMovie.id, colMovie) ? (
                                 <Check className="w-3.5 h-3.5 text-green-400" />
                               ) : (
                                 <Plus className="w-3.5 h-3.5" />
@@ -1613,7 +1635,7 @@ export const MovieModal: React.FC = () => {
                             }}
                             className="w-7 h-7 rounded-full border border-white/30 flex items-center justify-center hover:border-white text-white shrink-0"
                           >
-                            {isInMyList(simMovie.id) ? (
+                            {isInMyList(simMovie.id, simMovie) ? (
                               <Check className="w-3.5 h-3.5 text-green-400" />
                             ) : (
                               <Plus className="w-3.5 h-3.5" />

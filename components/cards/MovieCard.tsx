@@ -28,7 +28,7 @@ export const MovieCard = React.memo<MovieCardProps>(({
     onCardLeave,
   } = useNetflix();
   const [isLiked, setIsLiked] = useState(false);
-  const inList = isInMyList(movie.id);
+  const inList = isInMyList(movie.id, movie);
 
   const cardRef = useRef<HTMLDivElement>(null);
 
