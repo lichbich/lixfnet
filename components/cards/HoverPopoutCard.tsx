@@ -15,6 +15,7 @@ import { useNetflix } from '@/context/NetflixContext';
 import { RatingBadge, QualityBadge, Top10Badge } from '@/components/ui/Badge';
 import { NetflixRibbonN } from '@/components/ui/NetflixLogo';
 import { clientLogoCache } from '@/services/logoService';
+import { formatEpisodeTitle } from '@/services/movieApi';
 
 export const HoverPopoutCard: React.FC = () => {
   const {
@@ -33,6 +34,7 @@ export const HoverPopoutCard: React.FC = () => {
     clearWatchProgress,
     isMuted,
     toggleMute,
+    trailerVolume,
     setIsCardTrailerPlaying,
   } = useNetflix();
 
@@ -217,8 +219,11 @@ export const HoverPopoutCard: React.FC = () => {
       // ignore
     }
 
-    if (cachedKey && cachedKey !== 'none') {
-      setTrailerKey(cachedKey);
+    const immediateKey =
+      activeMovie.trailerYoutubeKey || (cachedKey && cachedKey !== 'none' ? cachedKey : null);
+
+    if (immediateKey) {
+      setTrailerKey(immediateKey);
       hasKey = true;
       maybePlayTrailer();
     } else {
@@ -228,9 +233,10 @@ export const HoverPopoutCard: React.FC = () => {
       const qYear = encodeURIComponent(activeMovie.year ? String(activeMovie.year) : '');
       const qTmdbId = encodeURIComponent(activeMovie.tmdb?.id ? String(activeMovie.tmdb.id) : '');
       const qMediaType = encodeURIComponent(activeMovie.tmdb?.type || '');
+      const qTrailerUrl = encodeURIComponent(activeMovie.trailerUrl || '');
 
       fetch(
-        `/api/trailer?title=${qTitle}&subTitle=${qSub}&slug=${qSlug}&year=${qYear}&tmdbId=${qTmdbId}&mediaType=${qMediaType}`
+        `/api/trailer?title=${qTitle}&subTitle=${qSub}&slug=${qSlug}&year=${qYear}&tmdbId=${qTmdbId}&mediaType=${qMediaType}&trailerUrl=${qTrailerUrl}`
       )
         .then((res) => res.json())
         .then((data) => {
@@ -315,7 +321,7 @@ export const HoverPopoutCard: React.FC = () => {
                 '*'
               );
               iframeRef.current?.contentWindow?.postMessage(
-                JSON.stringify({ event: 'command', func: 'setVolume', args: [100] }),
+                JSON.stringify({ event: 'command', func: 'setVolume', args: [trailerVolume] }),
                 '*'
               );
             }
@@ -427,8 +433,13 @@ export const HoverPopoutCard: React.FC = () => {
   const handlePlay = (e: React.MouseEvent) => {
     e.stopPropagation();
     closeHoverPopoutNow();
-    if (watchProgress?.episodeEmbed) {
-      startPlaying(activeMovie, watchProgress.episodeEmbed, watchProgress.episodeTitle);
+    if (watchProgress?.episodeEmbed || watchProgress?.episodeM3u8) {
+      startPlaying(
+        activeMovie,
+        watchProgress.episodeEmbed,
+        formatEpisodeTitle(watchProgress.episodeTitle),
+        watchProgress.episodeM3u8
+      );
     } else {
       startPlaying(activeMovie);
     }
@@ -544,7 +555,7 @@ export const HoverPopoutCard: React.FC = () => {
                       '*'
                     );
                     iframeRef.current?.contentWindow?.postMessage(
-                      JSON.stringify({ event: 'command', func: 'setVolume', args: [100] }),
+                      JSON.stringify({ event: 'command', func: 'setVolume', args: [trailerVolume] }),
                       '*'
                     );
                   } catch {}
