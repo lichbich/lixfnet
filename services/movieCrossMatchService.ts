@@ -310,7 +310,7 @@ export async function crossMatchAndEnrichMovie(movie: Movie): Promise<Movie> {
       if (enriched.title) searchQueries.push(cleanMovieTitleForSearch(enriched.title));
       if (enriched.subTitle) searchQueries.push(cleanMovieTitleForSearch(enriched.subTitle));
 
-      let matchedSlug: string | null = null;
+      let matchedSlug: string | undefined = undefined;
 
       // If slug was provided, test if it resolves valid streams
       if (enriched.slug) {
@@ -349,12 +349,13 @@ export async function crossMatchAndEnrichMovie(movie: Movie): Promise<Movie> {
               }
             }
 
-            if (bestItem && bestScore >= 40) {
-              matchedSlug = bestItem.slug;
-              const detail = await getMovieDetail(matchedSlug);
+            if (bestItem?.slug && bestScore >= 40) {
+              const targetSlug = String(bestItem.slug);
+              matchedSlug = targetSlug;
+              const detail = await getMovieDetail(targetSlug);
               if (detail) {
                 enriched = mergeMovieData(enriched, detail);
-                enriched.slug = matchedSlug;
+                enriched.slug = targetSlug;
               }
               break;
             }
