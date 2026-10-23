@@ -3,6 +3,94 @@ import { URL } from 'url';
 
 const PORT = process.env.PORT || 8989;
 
+const AD_SIGNATURES = [
+  '/v8/',
+  '/v7/',
+  '/v9/',
+  '/v6/',
+  'convertv8',
+  'segment_',
+  'd61a03b1dabe537cc05ffe5c9c280f56',
+  '9922',
+  'f8bet',
+  'jun88',
+  'hi88',
+  'shbet',
+  'new88',
+  '789bet',
+  'okvip',
+];
+
+function isAdPattern(text) {
+  const lower = text.toLowerCase();
+  return AD_SIGNATURES.some((sig) => lower.includes(sig));
+}
+
+function cleanM3u8Manifest(rawText) {
+  if (!rawText || typeof rawText !== 'string') return rawText;
+  if (rawText.includes('#EXT-X-STREAM-INF') && !rawText.includes('#EXTINF')) return rawText;
+
+  const lines = rawText.split(/\r?\n/);
+  const result = [];
+  let inDiscontinuityBlock = false;
+  let blockBuffer = [];
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    const trimmed = line.trim();
+
+    if (trimmed === '#EXT-X-DISCONTINUITY') {
+      if (!inDiscontinuityBlock) {
+        inDiscontinuityBlock = true;
+        blockBuffer = [line];
+      } else {
+        blockBuffer.push(line);
+        const blockContent = blockBuffer.join('\n');
+        if (isAdPattern(blockContent)) {
+          result.push('#EXT-X-DISCONTINUITY');
+        } else {
+          result.push(...blockBuffer);
+        }
+        inDiscontinuityBlock = false;
+        blockBuffer = [];
+      }
+      continue;
+    }
+
+    if (inDiscontinuityBlock) {
+      blockBuffer.push(line);
+    } else {
+      if (isAdPattern(trimmed)) {
+        if (result.length > 0 && result[result.length - 1].trim().startsWith('#EXTINF:')) {
+          result.pop();
+        }
+        continue;
+      }
+      result.push(line);
+    }
+  }
+
+  if (blockBuffer.length > 0) {
+    const blockContent = blockBuffer.join('\n');
+    if (!isAdPattern(blockContent)) {
+      result.push(...blockBuffer);
+    }
+  }
+
+  const sanitizedLines = [];
+  for (const l of result) {
+    if (
+      l.trim() === '#EXT-X-DISCONTINUITY' &&
+      sanitizedLines[sanitizedLines.length - 1]?.trim() === '#EXT-X-DISCONTINUITY'
+    ) {
+      continue;
+    }
+    sanitizedLines.push(l);
+  }
+
+  return sanitizedLines.join('\n');
+}
+
 /**
  * Ultra-lightweight Streaming Proxy for NetLix
  * Enables users abroad to stream HLS video through a residential Vietnam IP.
@@ -67,11 +155,12 @@ const server = http.createServer(async (req, res) => {
     const proxyBase = `${proto}://${host}`;
 
     if (isM3u8) {
-      // 1. Rewrite M3U8 Master / Media Playlist
+      // 1. Rewrite M3U8 Master / Media Playlist & Strip Ads
       const rawText = await upstreamRes.text();
+      const cleanedText = cleanM3u8Manifest(rawText);
       const baseUrl = targetUrl.substring(0, targetUrl.lastIndexOf('/') + 1);
 
-      const rewritten = rawText
+      const rewritten = cleanedText
         .split('\n')
         .map((line) => {
           const trimmed = line.trim();

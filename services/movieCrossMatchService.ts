@@ -310,8 +310,18 @@ export async function crossMatchAndEnrichMovie(movie: Movie): Promise<Movie> {
       if (enriched.title) searchQueries.push(cleanMovieTitleForSearch(enriched.title));
       if (enriched.subTitle) searchQueries.push(cleanMovieTitleForSearch(enriched.subTitle));
 
-      let matchedSlug: string | null = enriched.slug || null;
+      let matchedSlug: string | undefined = undefined;
 
+      // If slug was provided, test if it resolves valid streams
+      if (enriched.slug) {
+        const directDetail = await getMovieDetail(enriched.slug);
+        if (directDetail && (directDetail.episodesServers?.length || directDetail.m3u8Url)) {
+          matchedSlug = enriched.slug;
+          enriched = mergeMovieData(enriched, directDetail);
+        }
+      }
+
+      // If direct slug failed (e.g. slight naming variant or 404), search PhimAPI dynamically
       if (!matchedSlug) {
         for (const q of searchQueries) {
           const pRes = await fetch(`${PHIMAPI_BASE}/v1/api/tim-kiem?keyword=${encodeURIComponent(q)}&limit=10`, getFetchOptions(3600));
@@ -339,18 +349,17 @@ export async function crossMatchAndEnrichMovie(movie: Movie): Promise<Movie> {
               }
             }
 
-            if (bestItem && bestScore >= 40) {
-              matchedSlug = bestItem.slug;
+            if (bestItem?.slug && bestScore >= 40) {
+              const targetSlug = String(bestItem.slug);
+              matchedSlug = targetSlug;
+              const detail = await getMovieDetail(targetSlug);
+              if (detail) {
+                enriched = mergeMovieData(enriched, detail);
+                enriched.slug = targetSlug;
+              }
               break;
             }
           }
-        }
-      }
-
-      if (matchedSlug) {
-        const detail = await getMovieDetail(matchedSlug);
-        if (detail) {
-          enriched = mergeMovieData(enriched, detail);
         }
       }
     } catch (err) {
