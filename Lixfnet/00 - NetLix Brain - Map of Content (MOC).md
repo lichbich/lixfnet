@@ -51,6 +51,7 @@ mindmap
       [[06.1 - Bang Tong Hop Loi & Cach Khac Phuc]]
     Mo Rong Nen Tang
       [[07.1 - Dinh Huong Phat Trien Mobile & Samsung Smart TV (Tizen)]]
+      [[07.2 - Giai Phap Proxy Streaming Cho Nguoi Dung Nuoc Ngoai]]
 ```
 
 ---

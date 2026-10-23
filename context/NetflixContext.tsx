@@ -30,6 +30,14 @@ interface NetflixContextType {
   trailerVolume: number;
   setTrailerVolume: (volume: number) => void;
   isLoadingDetail: boolean;
+  // Streaming Proxy for International Users (Saved per device)
+  streamProxyUrl: string;
+  isStreamProxyEnabled: boolean;
+  setStreamProxyUrl: (url: string) => void;
+  setIsStreamProxyEnabled: (enabled: boolean) => void;
+  isProxySettingsOpen: boolean;
+  openProxySettings: () => void;
+  closeProxySettings: () => void;
   // Auth & Account Management
   currentUser: AuthUser | null;
   isCreateUserModalOpen: boolean;
@@ -120,6 +128,42 @@ export const NetflixProvider: React.FC<{ children: React.ReactNode }> = ({ child
   // Auth & Account Management State
   const [currentUser, setCurrentUser] = useState<AuthUser | null>(null);
   const [isCreateUserModalOpen, setIsCreateUserModalOpen] = useState<boolean>(false);
+
+  // Streaming Proxy State (Per-device localStorage only)
+  const [streamProxyUrl, setStreamProxyUrlState] = useState<string>('');
+  const [isStreamProxyEnabled, setIsStreamProxyEnabledState] = useState<boolean>(false);
+  const [isProxySettingsOpen, setIsProxySettingsOpen] = useState<boolean>(false);
+
+  const openProxySettings = useCallback(() => setIsProxySettingsOpen(true), []);
+  const closeProxySettings = useCallback(() => setIsProxySettingsOpen(false), []);
+
+  const setStreamProxyUrl = useCallback((url: string) => {
+    const clean = (url || '').trim();
+    setStreamProxyUrlState(clean);
+    if (typeof window !== 'undefined') {
+      localStorage.setItem('lixfnet_stream_proxy', clean);
+    }
+  }, []);
+
+  const setIsStreamProxyEnabled = useCallback((enabled: boolean) => {
+    setIsStreamProxyEnabledState(enabled);
+    if (typeof window !== 'undefined') {
+      localStorage.setItem('lixfnet_stream_proxy_enabled', enabled ? 'true' : 'false');
+    }
+  }, []);
+
+  // Load proxy on mount (strictly from this device's localStorage)
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    try {
+      const savedProxy = localStorage.getItem('lixfnet_stream_proxy');
+      const savedEnabled = localStorage.getItem('lixfnet_stream_proxy_enabled');
+      if (savedProxy) {
+        setStreamProxyUrlState(savedProxy);
+        setIsStreamProxyEnabledState(savedEnabled !== 'false');
+      }
+    } catch {}
+  }, []);
 
   // Sync user-specific mute and volume preference when user logs in or switches
   useEffect(() => {
@@ -1053,6 +1097,14 @@ export const NetflixProvider: React.FC<{ children: React.ReactNode }> = ({ child
         closeCreateUserModal,
         loginUser,
         logoutUser,
+        // Streaming Proxy
+        streamProxyUrl,
+        isStreamProxyEnabled,
+        setStreamProxyUrl,
+        setIsStreamProxyEnabled,
+        isProxySettingsOpen,
+        openProxySettings,
+        closeProxySettings,
         selectedMovie,
         playingMovie,
         currentEpisodeEmbed,
