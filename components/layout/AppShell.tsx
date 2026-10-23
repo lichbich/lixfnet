@@ -8,6 +8,7 @@ import { MovieModal } from '@/components/modals/MovieModal';
 import { VideoPlayerModal } from '@/components/player/VideoPlayerModal';
 import { HoverPopoutCard } from '@/components/cards/HoverPopoutCard';
 import { CreateUserModal } from '@/components/auth/CreateUserModal';
+import { ProxySettingsModal } from '@/components/modals/ProxySettingsModal';
 
 export default function AppShell({ children }: { children: React.ReactNode }) {
   const [mounted, setMounted] = useState(false);
@@ -57,6 +58,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
           <VideoPlayerModal />
           <HoverPopoutCard />
           <CreateUserModal />
+          <ProxySettingsModal />
           <Footer />
         </NetflixProvider>
       ) : (

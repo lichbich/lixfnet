@@ -33,6 +33,8 @@ export const VideoPlayerModal: React.FC = () => {
     getWatchProgress,
     getEpisodeProgress,
     isLoadingDetail,
+    streamProxyUrl,
+    isStreamProxyEnabled,
   } = useNetflix();
 
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -81,6 +83,16 @@ export const VideoPlayerModal: React.FC = () => {
   const isDirectHls = Boolean(resolvedM3u8 && !useIframeFallback);
   const isLocalVideo = Boolean(playingMovie?.videoUrl && !resolvedM3u8 && !activeEmbed);
   const isDirectVideo = isDirectHls || isLocalVideo;
+
+  // Wrap M3U8 with residential Vietnam proxy if user enabled proxy streaming
+  const effectiveM3u8 = useMemo(() => {
+    if (!resolvedM3u8) return '';
+    if (isStreamProxyEnabled && streamProxyUrl && !resolvedM3u8.includes('/m3u8?url=')) {
+      const cleanBase = streamProxyUrl.replace(/\/+$/, '');
+      return `${cleanBase}/m3u8?url=${encodeURIComponent(resolvedM3u8)}`;
+    }
+    return resolvedM3u8;
+  }, [resolvedM3u8, isStreamProxyEnabled, streamProxyUrl]);
 
   // Determine if a valid next episode exists in the current server list
   // Safety guard: If current episode is the latest or finale, nextEpisode is strictly null
@@ -384,7 +396,7 @@ export const VideoPlayerModal: React.FC = () => {
   // HLS stream attachment & native seek handling
   useEffect(() => {
     if (!playingMovie) return;
-    if (!isDirectHls || !resolvedM3u8) {
+    if (!isDirectHls || !effectiveM3u8) {
       if (hlsRef.current) {
         hlsRef.current.destroy();
         hlsRef.current = null;
@@ -405,7 +417,7 @@ export const VideoPlayerModal: React.FC = () => {
       });
       hlsRef.current = hls;
 
-      hls.loadSource(resolvedM3u8);
+      hls.loadSource(effectiveM3u8);
       hls.attachMedia(video);
 
       hls.on(Hls.Events.MANIFEST_PARSED, () => {
@@ -444,7 +456,7 @@ export const VideoPlayerModal: React.FC = () => {
       });
     } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
       // Native Safari / iOS HLS
-      video.src = resolvedM3u8;
+      video.src = effectiveM3u8;
       const onLoaded = () => {
         setIsVideoLoaded(true);
         if (sessionSecondsRef.current > 5) {
@@ -470,7 +482,7 @@ export const VideoPlayerModal: React.FC = () => {
         hlsRef.current = null;
       }
     };
-  }, [resolvedM3u8, isDirectHls, playingMovie?.id, playingMovie?.slug, currentEpisodeEmbed]);
+  }, [effectiveM3u8, isDirectHls, playingMovie?.id, playingMovie?.slug, currentEpisodeEmbed]);
 
   // Periodic watch progress tracker (saves every 4 seconds)
   useEffect(() => {
@@ -984,6 +996,17 @@ export const VideoPlayerModal: React.FC = () => {
 
               {/* Right: Actions */}
               <div className="flex items-center gap-2 sm:gap-3 shrink-0">
+                {/* Proxy Streaming Status Indicator */}
+                {isStreamProxyEnabled && streamProxyUrl && (
+                  <div
+                    className="hidden sm:flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-emerald-500/20 border border-emerald-500/40 text-emerald-300 text-[11px] font-semibold backdrop-blur-md shadow-sm"
+                    title={`Đang truyền qua Proxy Việt Nam: ${streamProxyUrl}`}
+                  >
+                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+                    <span>Proxy VN</span>
+                  </div>
+                )}
+
                 {/* Fallback to Iframe switch if embed is also available */}
                 {activeEmbed && (
                   <button

@@ -18,13 +18,23 @@ import {
   Film,
   Flame,
   Bookmark,
+  Globe,
 } from 'lucide-react';
 import { NetflixLogo } from '@/components/ui/NetflixLogo';
 import { useNetflix } from '@/context/NetflixContext';
 
 export const Navbar: React.FC = () => {
   const pathname = usePathname();
-  const { searchQuery, setSearchQuery, currentUser, openCreateUserModal, logoutUser } = useNetflix();
+  const {
+    searchQuery,
+    setSearchQuery,
+    currentUser,
+    openCreateUserModal,
+    logoutUser,
+    openProxySettings,
+    streamProxyUrl,
+    isStreamProxyEnabled,
+  } = useNetflix();
   const [isScrolled, setIsScrolled] = useState(false);
   const [isSearchOpen, setIsSearchOpen] = useState(false);
   const [showNotifications, setShowNotifications] = useState(false);
@@ -332,11 +342,39 @@ export const Navbar: React.FC = () => {
 
                 <div className="h-px bg-zinc-800 my-1" />
 
+                {/* Proxy Settings for Foreign Relatives */}
+                <div
+                  onClick={() => {
+                    setShowProfileMenu(false);
+                    openProxySettings();
+                  }}
+                  className="px-4 py-2 text-zinc-300 hover:text-white hover:bg-white/10 cursor-pointer flex items-center justify-between text-xs transition group"
+                >
+                  <div className="flex items-center gap-2.5">
+                    <Globe className="w-4 h-4 text-emerald-400 group-hover:rotate-12 transition-transform" />
+                    <span>Proxy xem từ nước ngoài</span>
+                  </div>
+                  {isStreamProxyEnabled && streamProxyUrl ? (
+                    <span
+                      className="w-2 h-2 rounded-full bg-emerald-400 shadow-[0_0_8px_rgba(52,211,153,0.9)] animate-pulse"
+                      title="Proxy đang hoạt động"
+                    />
+                  ) : (
+                    <span className="w-2 h-2 rounded-full bg-zinc-600" title="Proxy đang tắt" />
+                  )}
+                </div>
+
                 <div className="px-4 py-1.5 text-zinc-400 hover:text-white hover:bg-zinc-800 cursor-pointer flex items-center gap-2.5 text-xs">
                   <User className="w-4 h-4" />
                   <span>Quản lý hồ sơ</span>
                 </div>
-                <div className="px-4 py-1.5 text-zinc-400 hover:text-white hover:bg-zinc-800 cursor-pointer flex items-center gap-2.5 text-xs">
+                <div
+                  onClick={() => {
+                    setShowProfileMenu(false);
+                    openProxySettings();
+                  }}
+                  className="px-4 py-1.5 text-zinc-400 hover:text-white hover:bg-zinc-800 cursor-pointer flex items-center gap-2.5 text-xs transition"
+                >
                   <Settings className="w-4 h-4" />
                   <span>Cài đặt</span>
                 </div>

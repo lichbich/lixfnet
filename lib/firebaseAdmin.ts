@@ -243,4 +243,31 @@ export async function removeUserMyListItem(username: string, key: string): Promi
   await itemRef.remove();
 }
 
+/**
+ * Gets global stream proxy configuration from Firebase Realtime Database
+ */
+export async function getSystemProxy(): Promise<{ url: string; enabled: boolean; updatedAt?: string } | null> {
+  try {
+    const proxyRef = getLixfnetRef('system/streamProxy');
+    const snap = await proxyRef.once('value');
+    if (!snap.exists()) return null;
+    return snap.val();
+  } catch (err) {
+    console.error('getSystemProxy error:', err);
+    return null;
+  }
+}
+
+/**
+ * Saves global stream proxy configuration to Firebase Realtime Database
+ */
+export async function saveSystemProxy(url: string, enabled: boolean): Promise<void> {
+  const proxyRef = getLixfnetRef('system/streamProxy');
+  await proxyRef.set({
+    url: (url || '').trim(),
+    enabled: Boolean(enabled),
+    updatedAt: new Date().toISOString(),
+  });
+}
+
 
