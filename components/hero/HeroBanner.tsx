@@ -6,6 +6,7 @@ import { NetflixRibbonN } from '@/components/ui/NetflixLogo';
 import { useNetflix } from '@/context/NetflixContext';
 import { Movie } from '@/types';
 import { formatEpisodeTitle } from '@/services/movieApi';
+import { useHdTrailerFrame } from '@/lib/useHdTrailerFrame';
 
 interface HeroBannerProps {
   movie?: Movie | null;
@@ -39,6 +40,11 @@ export const HeroBanner: React.FC<HeroBannerProps> = ({ movie, badgeText }) => {
 
   const containerRef = useRef<HTMLDivElement>(null);
   const iframeRef = useRef<HTMLIFrameElement>(null);
+  const { containerRef: trailerContainerRef, iframeStyle: hdIframeStyle } = useHdTrailerFrame({
+    baseWidth: 2560,
+    baseHeight: 1440,
+    overscan: 1.2,
+  });
   const trailerTimerRef = useRef<NodeJS.Timeout | null>(null);
   const watchdogTimerRef = useRef<NodeJS.Timeout | null>(null);
 
@@ -676,9 +682,13 @@ export const HeroBanner: React.FC<HeroBannerProps> = ({ movie, badgeText }) => {
 
             {/* Live Autoplay YouTube Trailer Player - Centered Full-Cover without black letterbox gaps */}
             {isTrailerPlaying && trailerKey && (
-              <div className="absolute inset-0 w-full h-full overflow-hidden pointer-events-none flex items-center justify-center">
+              <div
+                ref={trailerContainerRef}
+                className="absolute inset-0 w-full h-full overflow-hidden pointer-events-none flex items-center justify-center"
+              >
                 <iframe
                   ref={iframeRef}
+                  style={hdIframeStyle}
                   id="hero-trailer-iframe"
                   src={`https://www.youtube-nocookie.com/embed/${trailerKey}?autoplay=1&mute=1&controls=0&modestbranding=1&rel=0&loop=1&playlist=${trailerKey}&playsinline=1&enablejsapi=1&vq=hd1080${
                     typeof window !== 'undefined' && window.location.origin
@@ -742,7 +752,7 @@ export const HeroBanner: React.FC<HeroBannerProps> = ({ movie, badgeText }) => {
                       sendIframeCommand('mute');
                     }
                   }}
-                  className={`absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[120%] h-[142%] min-w-full min-h-full object-cover transition-opacity duration-1000 ${
+                  className={`transition-opacity duration-1000 ${
                     isTrailerReady ? 'opacity-100' : 'opacity-0'
                   }`}
                   allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
