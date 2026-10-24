@@ -17,6 +17,7 @@ import { NetflixRibbonN } from '@/components/ui/NetflixLogo';
 import { clientLogoCache } from '@/services/logoService';
 import { formatEpisodeTitle } from '@/services/movieApi';
 import { getCanonicalMovieId } from '@/lib/movieUtils';
+import { useHdTrailerFrame } from '@/lib/useHdTrailerFrame';
 
 export const HoverPopoutCard: React.FC = () => {
   const {
@@ -56,6 +57,11 @@ export const HoverPopoutCard: React.FC = () => {
   const trailerTimerRef = useRef<NodeJS.Timeout | null>(null);
   const watchdogTimerRef = useRef<NodeJS.Timeout | null>(null);
   const iframeRef = useRef<HTMLIFrameElement>(null);
+  const { containerRef: trailerContainerRef, iframeStyle: hdIframeStyle } = useHdTrailerFrame({
+    baseWidth: 1920,
+    baseHeight: 1080,
+    overscan: 1.16,
+  });
 
   const cardRef = useRef<HTMLDivElement>(null);
   const exitTimerRef = useRef<NodeJS.Timeout | null>(null);
@@ -523,9 +529,13 @@ export const HoverPopoutCard: React.FC = () => {
 
         {/* Live YouTube Trailer Player (Autoplay, Loop, Muted or synced with isMuted) */}
         {isTrailerPlaying && trailerKey && (
-          <div className="absolute inset-0 w-full h-full overflow-hidden pointer-events-none flex items-center justify-center">
+          <div
+            ref={trailerContainerRef}
+            className="absolute inset-0 w-full h-full overflow-hidden pointer-events-none flex items-center justify-center"
+          >
             <iframe
               ref={iframeRef}
+              style={hdIframeStyle}
               src={`https://www.youtube-nocookie.com/embed/${trailerKey}?autoplay=1&mute=1&controls=0&modestbranding=1&rel=0&loop=1&playlist=${trailerKey}&playsinline=1&enablejsapi=1&vq=hd1080${
                 typeof window !== 'undefined' && window.location.origin
                   ? `&origin=${encodeURIComponent(window.location.origin)}`
@@ -594,7 +604,7 @@ export const HoverPopoutCard: React.FC = () => {
                   } catch {}
                 }
               }}
-              className={`absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[116%] h-[132%] min-w-full min-h-full object-cover transition-opacity duration-700 ${
+              className={`transition-opacity duration-700 ${
                 isTrailerReady ? 'opacity-100' : 'opacity-0'
               }`}
               allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
