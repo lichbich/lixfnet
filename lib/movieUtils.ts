@@ -451,3 +451,143 @@ export function deduplicateWatchProgressMap(
 
   return canonicalMap;
 }
+
+/**
+ * Cleanly format episode title, preventing duplicated 'Tập' prefixes (e.g. 'Tập Tập 04' -> 'Tập 04', '04' -> 'Tập 04', 'Full' -> 'Bản Full')
+ */
+export function formatEpisodeTitle(title?: string): string {
+  if (!title || !title.trim()) return 'Tập 1';
+  const clean = title.trim();
+  const stripped = clean.replace(/^(tập\s*)+/i, '').trim();
+  if (!stripped) return 'Tập 1';
+  if (/^full$/i.test(stripped)) return 'Bản Full';
+  return `Tập ${stripped}`;
+}
+
+/**
+ * Extract numeric episode index from labels like "Tập 01", "01", "Tập 12 - END", "Tập 4"
+ */
+export function extractEpisodeNumber(name: string | number | undefined | null): number | null {
+  if (name === undefined || name === null) return null;
+  const m = String(name).match(/\d+/);
+  if (!m) return null;
+  const n = parseInt(m[0], 10);
+  return Number.isFinite(n) ? n : null;
+}
+
+export interface NextEpisodeTarget {
+  episodeTitle: string;
+  episodeNumber: number | null;
+  embedUrl?: string;
+  m3u8Url?: string;
+  isNewEpisode: boolean;
+}
+
+/**
+ * For series movies, determines if there is a next unwatched episode when the user
+ * has completed the previous episode and a new episode is available.
+ */
+export function findNextEpisodeTarget(
+  movie: Movie,
+  wp: WatchProgress
+): NextEpisodeTarget | null {
+  if (!movie || !wp) return null;
+
+  // 1. Collect all playable episode items from episodesServers or seasonsList
+  let items: { name: string; slug?: string; embed?: string; m3u8?: string }[] = [];
+  if (movie.episodesServers && movie.episodesServers.length > 0) {
+    const serverWithM3u8 = movie.episodesServers.find((s) =>
+      s.items?.some((it) => it.m3u8 && it.m3u8.trim().length > 0)
+    );
+    const server = serverWithM3u8 || movie.episodesServers[0];
+    items = server?.items || [];
+  } else if (movie.seasonsList && movie.seasonsList.length > 0) {
+    for (const season of movie.seasonsList) {
+      for (const ep of season.episodes || []) {
+        items.push({
+          name: ep.title || (typeof ep.number === 'number' ? `Tập ${ep.number}` : String(ep.number)),
+          slug: ep.slug || `tap-${ep.number}`,
+          embed: ep.embedUrl || '',
+          m3u8: ep.m3u8Url || '',
+        });
+      }
+    }
+  }
+
+  if (items.length === 0) return null;
+
+  const episodesProgress = wp.episodesProgress || {};
+
+  // Helper: check if a specific item is considered watched/completed
+  const isItemCompleted = (item: { name: string }, idx: number): boolean => {
+    const epNum = extractEpisodeNumber(item.name) ?? (idx + 1);
+    const epTitle = formatEpisodeTitle(item.name);
+    const rawName = item.name.trim();
+    const epPadded = epNum !== null ? String(epNum).padStart(2, '0') : null;
+
+    // Check against individual episode progress history
+    const candidates = [
+      epTitle,
+      rawName,
+      epNum !== null ? String(epNum) : null,
+      epPadded,
+      epNum !== null ? `Tập ${epNum}` : null,
+      epPadded !== null ? `Tập ${epPadded}` : null,
+    ].filter(Boolean) as string[];
+
+    for (const c of candidates) {
+      const prog = episodesProgress[c];
+      if (prog) {
+        if (prog.isCompleted || (prog.progressPercent || 0) >= 90) return true;
+      }
+    }
+
+    // Check against current top-level watched episode in wp
+    if (wp.episodeTitle) {
+      const wpNum = extractEpisodeNumber(wp.episodeTitle);
+      const wpTitle = formatEpisodeTitle(wp.episodeTitle);
+      const wpCompleted = (wp.progressPercent || 0) >= 90;
+
+      if (wpNum !== null && epNum !== null) {
+        if (epNum < wpNum) return true; // Prior episodes completed
+        if (epNum === wpNum && wpCompleted) return true; // Current episode completed
+      } else if (wpTitle === epTitle && wpCompleted) {
+        return true;
+      }
+    }
+
+    return false;
+  };
+
+  const currentEpCompleted = (wp.progressPercent || 0) >= 90;
+
+  // Find the first unwatched episode index
+  let firstUnwatchedIdx = -1;
+  for (let i = 0; i < items.length; i++) {
+    if (!isItemCompleted(items[i], i)) {
+      firstUnwatchedIdx = i;
+      break;
+    }
+  }
+
+  // If all episodes in items are completed, the user has watched everything available
+  if (firstUnwatchedIdx === -1) {
+    return null;
+  }
+
+  // If user completed their last watched episode and there is a next episode available
+  if (currentEpCompleted && firstUnwatchedIdx > 0) {
+    const nextItem = items[firstUnwatchedIdx];
+    const nextNum = extractEpisodeNumber(nextItem.name) ?? (firstUnwatchedIdx + 1);
+    return {
+      episodeTitle: formatEpisodeTitle(nextItem.name),
+      episodeNumber: nextNum,
+      embedUrl: nextItem.embed || undefined,
+      m3u8Url: nextItem.m3u8 || undefined,
+      isNewEpisode: true,
+    };
+  }
+
+  return null;
+}
+

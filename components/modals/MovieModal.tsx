@@ -19,7 +19,7 @@ import { useNetflix } from '@/context/NetflixContext';
 import { getSimilarMovies, formatEpisodeTitle } from '@/services/movieApi';
 import { getMovieCollection, MovieCollection } from '@/services/collectionService';
 import { clientLogoCache } from '@/services/logoService';
-import { getCanonicalMovieId, isSameMovie, cleanMovieDescription } from '@/lib/movieUtils';
+import { getCanonicalMovieId, isSameMovie, cleanMovieDescription, findNextEpisodeTarget } from '@/lib/movieUtils';
 import {
   TmdbEpisodeMeta,
   fetchTmdbEpisodes,
@@ -662,17 +662,30 @@ export const MovieModal: React.FC = () => {
       : [];
   const showTmdbRowSkeleton = isLoadingTmdbEpisodes && tmdbEpisodes.length === 0;
 
+  const isExpectedSeriesOrEpisodes =
+    Boolean(movie.slug) ||
+    movie.type === 'series' ||
+    Boolean(movie.seasons?.includes('Tập')) ||
+    Boolean(movie.seasons?.includes('mùa')) ||
+    Boolean(movie.seasons?.includes('Mùa'));
+
+  const nextEpisodeTarget =
+    isExpectedSeriesOrEpisodes && watchProgress
+      ? findNextEpisodeTarget(movie, watchProgress)
+      : null;
+
   const watchingChunkIndex = (() => {
-    if (!watchProgress?.episodeTitle || allEpisodes.length === 0) return -1;
+    const targetTitle = nextEpisodeTarget?.episodeTitle || watchProgress?.episodeTitle;
+    if (!targetTitle || allEpisodes.length === 0) return -1;
+    const targetLabel = formatEpisodeLabel(targetTitle);
     const currentEpIndex = allEpisodes.findIndex((ep) => {
       const epLabel = formatEpisodeLabel(ep.name);
-      const wpLabel = watchProgress?.episodeTitle ? formatEpisodeLabel(watchProgress.episodeTitle) : '';
       return (
-        wpLabel === epLabel ||
-        watchProgress.episodeTitle === `Tập ${ep.name}` ||
-        watchProgress.episodeTitle === ep.name ||
-        watchProgress.episodeTitle?.endsWith(` ${ep.name}`) ||
-        watchProgress.episodeTitle?.includes(`Tập ${ep.name} `)
+        targetLabel === epLabel ||
+        targetTitle === `Tập ${ep.name}` ||
+        targetTitle === ep.name ||
+        targetTitle.endsWith(` ${ep.name}`) ||
+        targetTitle.includes(`Tập ${ep.name} `)
       );
     });
     return currentEpIndex >= 0 ? Math.floor(currentEpIndex / CHUNK_SIZE) : -1;
@@ -680,12 +693,6 @@ export const MovieModal: React.FC = () => {
 
   const hasApiEpisodes = Boolean(movie.episodesServers && movie.episodesServers.length > 0);
   const hasStreamUrl = Boolean(hasApiEpisodes || movie.embedUrl || (movie.seasonsList && movie.seasonsList.length > 0));
-  const isExpectedSeriesOrEpisodes =
-    Boolean(movie.slug) ||
-    movie.type === 'series' ||
-    Boolean(movie.seasons?.includes('Tập')) ||
-    Boolean(movie.seasons?.includes('mùa')) ||
-    Boolean(movie.seasons?.includes('Mùa'));
   const showEpisodesSkeleton = isLoadingDetail && !hasApiEpisodes && isExpectedSeriesOrEpisodes;
 
   const handlePlayOrResume = () => {
@@ -696,7 +703,14 @@ export const MovieModal: React.FC = () => {
     setIsTrailerPlaying(false);
     setIsTrailerReady(false);
     handleClose();
-    if (watchProgress?.episodeEmbed || watchProgress?.episodeM3u8) {
+    if (nextEpisodeTarget) {
+      startPlaying(
+        movie,
+        nextEpisodeTarget.embedUrl,
+        nextEpisodeTarget.episodeTitle,
+        nextEpisodeTarget.m3u8Url
+      );
+    } else if (watchProgress?.episodeEmbed || watchProgress?.episodeM3u8) {
       startPlaying(
         movie,
         watchProgress.episodeEmbed,
@@ -919,7 +933,15 @@ export const MovieModal: React.FC = () => {
                     className="flex items-center gap-2 bg-white text-black font-bold px-6 py-2.5 rounded-md hover:bg-white/90 active:scale-95 transition shadow-lg text-sm sm:text-base group"
                   >
                     <Play className="w-5 h-5 fill-black" />
-                    <span>{!hasStreamUrl ? 'Xem Trailer' : watchProgress ? 'Tiếp tục xem' : 'Phát'}</span>
+                    <span>
+                      {!hasStreamUrl
+                        ? 'Xem Trailer'
+                        : nextEpisodeTarget
+                        ? `Xem ${nextEpisodeTarget.episodeTitle}`
+                        : watchProgress
+                        ? 'Tiếp tục xem'
+                        : 'Phát'}
+                    </span>
                   </button>
 
                   <button
@@ -942,7 +964,7 @@ export const MovieModal: React.FC = () => {
                 </div>
 
                 {/* Progress pill if user has watched */}
-                {watchProgress && (
+                {watchProgress && !nextEpisodeTarget && (
                   <div className="flex items-center gap-2.5 bg-black/60 backdrop-blur-md px-3 py-1.5 rounded-lg border border-white/10 max-w-fit shadow-md">
                     <div className="w-20 sm:w-28 bg-zinc-700/80 h-1.5 rounded-full overflow-hidden">
                       <div
@@ -952,6 +974,16 @@ export const MovieModal: React.FC = () => {
                     </div>
                     <span className="text-xs text-zinc-300 font-semibold whitespace-nowrap">
                       {formatEpisodeLabel(watchProgress.episodeTitle || 'Tập 1')} • {Math.round(watchProgress.currentTime / 60)}/{epDurationMinutes}ph
+                    </span>
+                  </div>
+                )}
+
+                {/* New episode announced pill */}
+                {nextEpisodeTarget && (
+                  <div className="flex items-center gap-2 bg-[#E50914]/20 border border-[#E50914]/40 px-3 py-1.5 rounded-lg max-w-fit shadow-md">
+                    <span className="w-2 h-2 rounded-full bg-[#E50914] animate-pulse" />
+                    <span className="text-xs text-white font-bold whitespace-nowrap">
+                      Tập mới: {nextEpisodeTarget.episodeTitle}
                     </span>
                   </div>
                 )}
@@ -1255,17 +1287,21 @@ export const MovieModal: React.FC = () => {
                       const epProg = getEpisodeProgress(movieKey, ep.name, movie);
                       const epLabel = formatEpisodeLabel(ep.name);
                       const wpLabel = watchProgress?.episodeTitle ? formatEpisodeLabel(watchProgress.episodeTitle) : '';
-                      const isCurrent =
-                        Boolean(watchProgress?.episodeTitle) &&
-                        (wpLabel === epLabel ||
-                          watchProgress?.episodeTitle === `Tập ${ep.name}` ||
-                          watchProgress?.episodeTitle === ep.name ||
-                          watchProgress?.episodeTitle?.endsWith(` ${ep.name}`) ||
-                          watchProgress?.episodeTitle?.includes(`Tập ${ep.name} `));
-                      const percent = epProg?.progressPercent || (isCurrent ? watchProgress?.progressPercent : 0) || 0;
-                      const isCompleted = Boolean(epProg?.isCompleted);
-
                       const epNumber = extractEpisodeNumber(ep.name);
+
+                      // Target active episode: if next episode exists after completing previous one, highlight next episode
+                      const targetTitle = nextEpisodeTarget ? nextEpisodeTarget.episodeTitle : wpLabel;
+                      const isCurrent =
+                        Boolean(targetTitle) &&
+                        (targetTitle === epLabel ||
+                          targetTitle === `Tập ${ep.name}` ||
+                          targetTitle === ep.name ||
+                          targetTitle.endsWith(` ${ep.name}`) ||
+                          targetTitle.includes(`Tập ${ep.name} `));
+                      const percent = epProg?.progressPercent || (isCurrent && !nextEpisodeTarget ? watchProgress?.progressPercent : 0) || 0;
+                      const isCompleted =
+                        Boolean(epProg?.isCompleted) ||
+                        (!isCurrent && epNumber !== null && nextEpisodeTarget?.episodeNumber !== null && nextEpisodeTarget?.episodeNumber !== undefined && epNumber < nextEpisodeTarget.episodeNumber);
                       const meta = epNumber !== null ? tmdbEpisodeMap.get(epNumber) : undefined;
                       const displayNumber =
                         epNumber ?? (typeof episodeRangeIndex === 'number' ? episodeRangeIndex * CHUNK_SIZE : 0) + idx + 1;

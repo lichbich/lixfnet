@@ -122,7 +122,7 @@ export const ContinueWatchingCard: React.FC<ContinueWatchingCardProps> = ({
       <div className="absolute bottom-0 left-0 right-0 h-1 bg-zinc-700/80">
         <div
           className="h-full bg-[#E50914] rounded-r-full transition-all duration-300"
-          style={{ width: `${movie.progress || 50}%` }}
+          style={{ width: `${movie.progress ?? 0}%` }}
         />
       </div>
     </div>

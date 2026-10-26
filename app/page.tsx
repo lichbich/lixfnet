@@ -30,7 +30,13 @@ import {
 import { Movie } from '@/types';
 
 export default function HomePage() {
-  const { searchQuery, continueWatchingList, watchProgressMap, currentUser } = useNetflix();
+  const {
+    searchQuery,
+    continueWatchingList,
+    watchProgressMap,
+    currentUser,
+    reconcileWatchProgressWithMovies,
+  } = useNetflix();
 
   const [heroMovie, setHeroMovie] = useState<Movie | null>(null);
   const [heroBadge, setHeroBadge] = useState<string>('Mới cập nhật hôm nay');
@@ -182,11 +188,26 @@ export default function HomePage() {
         // UI reveals immediately — zero black screen!
         setIsLoading(false);
 
+        // Instant reconciliation with fresh catalog
+        reconcileWatchProgressWithMovies([
+          ...cleanLatest1,
+          ...cleanLatest2,
+          ...cleanKorea,
+          ...cleanShows,
+          ...cleanVietnam,
+          ...cleanUs,
+          ...cleanAction,
+          ...cleanRomance,
+        ]);
+
         // --- STAGE 2: Progressive background enrichment for Streaming Platform Tops ---
         getNetflixTop10VN()
           .then((netflixTop10) => {
             if (!isMounted) return;
-            if (netflixTop10.series?.length > 0) setNetflixSeriesTop10(netflixTop10.series);
+            if (netflixTop10.series?.length > 0) {
+              setNetflixSeriesTop10(netflixTop10.series);
+              reconcileWatchProgressWithMovies(netflixTop10.series);
+            }
             if (netflixTop10.films?.length > 0) setNetflixFilmsTop10(netflixTop10.films);
           })
           .catch(() => {});

@@ -10,6 +10,8 @@ import {
   deduplicateMovies,
   deduplicateWatchProgressMap,
   mergeMovieData,
+  findNextEpisodeTarget,
+  extractEpisodeNumber,
 } from '@/lib/movieUtils';
 import { crossMatchAndEnrichMovie } from '@/services/movieCrossMatchService';
 import { clientLogoCache } from '@/services/logoService';
@@ -68,6 +70,7 @@ interface NetflixContextType {
   getWatchProgress: (slugOrId: string, movieObj?: Movie) => WatchProgress | undefined;
   getEpisodeProgress: (slugOrId: string, episodeNameOrNumber: string, movieObj?: Movie) => EpisodeProgress | undefined;
   clearWatchProgress: (slugOrId: string) => void;
+  reconcileWatchProgressWithMovies: (movies: Movie[]) => void;
   // Hover Popout Card Coordination
   hoveredMovie: Movie | null;
   hoverRect: HoverRect | null;
@@ -919,6 +922,104 @@ export const NetflixProvider: React.FC<{ children: React.ReactNode }> = ({ child
       .catch(() => {});
   }, [currentUser?.username]);
 
+  // Reconcile watch progress with fresh catalog movies (Zero-latency instant sync)
+  const reconcileWatchProgressWithMovies = useCallback((freshMovies: Movie[]) => {
+    if (!freshMovies || freshMovies.length === 0) return;
+
+    setWatchProgressMap((prev) => {
+      let hasChanges = false;
+      const nextMap = { ...prev };
+
+      for (const [key, wp] of Object.entries(prev)) {
+        if (!wp?.movie) continue;
+        const matchedFresh = freshMovies.find((m) => isSameMovie(m, wp.movie));
+        if (matchedFresh) {
+          const freshEpsCount = matchedFresh.episodesServers?.[0]?.items?.length || 0;
+          const currentEpsCount = wp.movie.episodesServers?.[0]?.items?.length || 0;
+
+          const freshEpNum = extractEpisodeNumber(matchedFresh.currentEpisode);
+          const currentEpNum = extractEpisodeNumber(wp.movie.currentEpisode || wp.episodeTitle);
+
+          const hasMoreEpisodes = freshEpsCount > currentEpsCount;
+          const hasHigherCurrentEp = freshEpNum !== null && currentEpNum !== null && freshEpNum > currentEpNum;
+
+          if (hasMoreEpisodes || hasHigherCurrentEp || matchedFresh.badges?.ribbon === 'TẬP MỚI') {
+            const merged = mergeMovieData(wp.movie, matchedFresh);
+            nextMap[key] = {
+              ...wp,
+              movie: merged,
+            };
+            hasChanges = true;
+          }
+        }
+      }
+
+      if (!hasChanges) return prev;
+
+      const activeUser = currentUserRef.current;
+      const userStorageKey = activeUser?.username
+        ? `netflix_watch_progress_${activeUser.username}`
+        : 'netflix_watch_progress_guest';
+      try {
+        localStorage.setItem(userStorageKey, JSON.stringify(nextMap));
+      } catch {}
+
+      return nextMap;
+    });
+  }, []);
+
+  // Background series freshness checker: Detect new episodes for series whose last episode was completed
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      const entries = Object.entries(watchProgressMapRef.current);
+      const seriesToRefresh = entries.filter(([_, wp]) => {
+        if (!wp?.movie) return false;
+        const isSeries = wp.movie.type === 'series' || Boolean(wp.movie.episodesServers?.length);
+        const isCurrentCompleted = (wp.progressPercent || 0) >= 90;
+        return isSeries && isCurrentCompleted;
+      });
+
+      if (seriesToRefresh.length === 0) return;
+
+      seriesToRefresh.slice(0, 5).forEach(async ([key, wp]) => {
+        const targetSlug = wp.movieSlug || wp.movie.slug || wp.movieId || wp.movie.id;
+        if (!targetSlug) return;
+        try {
+          const freshDetail = await getMovieDetail(targetSlug);
+          if (freshDetail && freshDetail.episodesServers && freshDetail.episodesServers.length > 0) {
+            const freshEpsCount = freshDetail.episodesServers[0]?.items?.length || 0;
+            const currentEpsCount = wp.movie.episodesServers?.[0]?.items?.length || 0;
+
+            if (freshEpsCount > currentEpsCount) {
+              setWatchProgressMap((prev) => {
+                const current = prev[key];
+                if (!current) return prev;
+                const merged = mergeMovieData(current.movie, freshDetail);
+                const next = {
+                  ...prev,
+                  [key]: {
+                    ...current,
+                    movie: merged,
+                  },
+                };
+                const activeUser = currentUserRef.current;
+                const userStorageKey = activeUser?.username
+                  ? `netflix_watch_progress_${activeUser.username}`
+                  : 'netflix_watch_progress_guest';
+                try {
+                  localStorage.setItem(userStorageKey, JSON.stringify(next));
+                } catch {}
+                return next;
+              });
+            }
+          }
+        } catch {}
+      });
+    }, 2000);
+
+    return () => clearTimeout(timer);
+  }, [currentUser?.username]);
+
   // Update Watch Progress (User-scoped & cloud synced with fixed canonical ID)
   const updateWatchProgress = useCallback(
     (
@@ -1114,24 +1215,52 @@ export const NetflixProvider: React.FC<{ children: React.ReactNode }> = ({ child
     });
   }, []);
 
-  // Derive continueWatchingList (Deduplicated and ordered by latest update)
+  // Derive continueWatchingList (Deduplicated, smart series transition, ordered by latest update)
   const continueWatchingList = useMemo(() => {
     const dedupedMap = deduplicateWatchProgressMap(watchProgressMap);
-    const sortedProgress = Object.values(dedupedMap)
-      .filter((wp) => wp && wp.movie && (wp.progressPercent || 0) < 95)
+    const sortedEntries = Object.values(dedupedMap)
+      .filter((wp): wp is WatchProgress => Boolean(wp && wp.movie))
       .sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
 
-    const movies: Movie[] = sortedProgress.map((wp) => ({
-      ...wp.movie,
-      progress: wp.progressPercent,
-      currentEpisode: wp.episodeTitle
-        ? formatEpisodeTitle(wp.episodeTitle)
-        : wp.movie?.currentEpisode
-        ? formatEpisodeTitle(wp.movie.currentEpisode)
-        : undefined,
-      embedUrl: wp.episodeEmbed || wp.movie?.embedUrl,
-      m3u8Url: wp.episodeM3u8 || wp.movie?.m3u8Url,
-    }));
+    const movies: Movie[] = [];
+
+    for (const wp of sortedEntries) {
+      const movie = wp.movie;
+      const isSeries = movie.type === 'series' || Boolean(movie.episodesServers?.length || movie.seasonsList?.length);
+
+      // Check if series has a next unwatched episode (e.g. Episode 5 when Episode 4 completed)
+      const nextTarget = isSeries ? findNextEpisodeTarget(movie, wp) : null;
+
+      if (nextTarget && nextTarget.isNewEpisode) {
+        // Series has a newly available or unwatched next episode!
+        movies.push({
+          ...movie,
+          progress: 0,
+          currentEpisode: nextTarget.episodeTitle,
+          embedUrl: nextTarget.embedUrl || movie.embedUrl,
+          m3u8Url: nextTarget.m3u8Url || movie.m3u8Url,
+          badges: {
+            ...movie.badges,
+            ribbon: 'TẬP MỚI',
+            subBadge: nextTarget.episodeNumber ? `Tập ${nextTarget.episodeNumber}` : movie.badges?.subBadge,
+          },
+        });
+      } else if ((wp.progressPercent || 0) < 90) {
+        // Movie or series episode still currently in-progress
+        movies.push({
+          ...movie,
+          progress: wp.progressPercent,
+          currentEpisode: wp.episodeTitle
+            ? formatEpisodeTitle(wp.episodeTitle)
+            : movie.currentEpisode
+            ? formatEpisodeTitle(movie.currentEpisode)
+            : undefined,
+          embedUrl: wp.episodeEmbed || movie.embedUrl,
+          m3u8Url: wp.episodeM3u8 || movie.m3u8Url,
+        });
+      }
+      // Otherwise: movie finished (>= 90%) or series caught up completely -> hidden from continue watching
+    }
 
     return deduplicateMovies(movies);
   }, [watchProgressMap]);
@@ -1359,6 +1488,7 @@ export const NetflixProvider: React.FC<{ children: React.ReactNode }> = ({ child
         getWatchProgress,
         getEpisodeProgress,
         clearWatchProgress,
+        reconcileWatchProgressWithMovies,
         hoveredMovie,
         hoverRect,
         isCardTrailerPlaying,
