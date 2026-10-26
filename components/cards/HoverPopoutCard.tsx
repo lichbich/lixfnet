@@ -16,7 +16,7 @@ import { RatingBadge, QualityBadge, Top10Badge } from '@/components/ui/Badge';
 import { NetflixRibbonN } from '@/components/ui/NetflixLogo';
 import { clientLogoCache } from '@/services/logoService';
 import { formatEpisodeTitle } from '@/services/movieApi';
-import { getCanonicalMovieId } from '@/lib/movieUtils';
+import { getCanonicalMovieId, findNextEpisodeTarget } from '@/lib/movieUtils';
 import { useHdTrailerFrame } from '@/lib/useHdTrailerFrame';
 
 export const HoverPopoutCard: React.FC = () => {
@@ -422,6 +422,15 @@ export const HoverPopoutCard: React.FC = () => {
   const inList = isInMyList(activeMovie.id, activeMovie);
   const watchProgress = getWatchProgress(activeMovie.slug || activeMovie.id, activeMovie);
 
+  const isSeries =
+    activeMovie.type === 'series' ||
+    Boolean(activeMovie.episodesServers?.length || activeMovie.seasonsList?.length);
+
+  const nextEpisodeTarget =
+    isSeries && watchProgress
+      ? findNextEpisodeTarget(activeMovie, watchProgress)
+      : null;
+
   // Responsive width calculation: blooms out smoothly and proportionally to the base card
   const targetWidth = Math.round(activeRect.width * 1.16);
   const popoutWidth = typeof window !== 'undefined'
@@ -461,7 +470,14 @@ export const HoverPopoutCard: React.FC = () => {
   const handlePlay = (e: React.MouseEvent) => {
     e.stopPropagation();
     closeHoverPopoutNow();
-    if (watchProgress?.episodeEmbed || watchProgress?.episodeM3u8) {
+    if (nextEpisodeTarget) {
+      startPlaying(
+        activeMovie,
+        nextEpisodeTarget.embedUrl,
+        nextEpisodeTarget.episodeTitle,
+        nextEpisodeTarget.m3u8Url
+      );
+    } else if (watchProgress?.episodeEmbed || watchProgress?.episodeM3u8) {
       startPlaying(
         activeMovie,
         watchProgress.episodeEmbed,
@@ -758,8 +774,30 @@ export const HoverPopoutCard: React.FC = () => {
           </button>
         </div>
 
-        {/* Watch Progress Section if user has watched */}
-        {watchProgress ? (
+        {/* Watch Progress Section if user has watched or has next episode */}
+        {nextEpisodeTarget ? (
+          <div>
+            <div className="flex items-center justify-between text-xs font-semibold text-zinc-300">
+              <span className="flex items-center gap-1.5 text-white font-bold">
+                <span className="w-1.5 h-1.5 rounded-full bg-[#E50914] animate-pulse" />
+                <span>{nextEpisodeTarget.episodeTitle}</span>
+                <span className="text-[10px] text-[#E50914] uppercase font-bold tracking-wider ml-1">
+                  • Tập mới
+                </span>
+              </span>
+              <span className="text-[11px] text-zinc-400 font-mono">
+                0/{activeMovie.durationMinutes || 45}ph
+              </span>
+            </div>
+            {/* Netflix Red Progress Bar at 0% */}
+            <div className="w-full bg-zinc-700 h-1.5 rounded-full overflow-hidden mt-1.5">
+              <div
+                className="bg-[#E50914] h-full rounded-full transition-all duration-300"
+                style={{ width: '0%' }}
+              />
+            </div>
+          </div>
+        ) : watchProgress && (watchProgress.progressPercent || 0) < 90 ? (
           <div>
             <div className="flex items-center justify-between text-xs font-semibold text-zinc-300">
               <span className="text-red-400">{watchProgress.episodeTitle || 'Đang xem dở'}</span>
@@ -777,7 +815,7 @@ export const HoverPopoutCard: React.FC = () => {
             </div>
           </div>
         ) : (
-          /* Normal Metadata if not yet watched */
+          /* Normal Metadata if not yet watched or completed */
           <div className="flex items-center gap-2 text-xs">
             <span className="text-green-400 font-bold">{activeMovie.matchRate}% Phù hợp</span>
             <RatingBadge rating={activeMovie.rating} className="text-[10px]" />
