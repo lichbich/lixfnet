@@ -1,11 +1,13 @@
 'use client';
 
-import React, { useRef, useEffect, useState } from 'react';
+import React, { useRef, useEffect, useState, useMemo, useCallback } from 'react';
 import '@videojs/react/video/skin.css';
 import { VideoPlayer, VideoSkin, Video, usePlayer } from '@videojs/react/video';
 import { HlsJsVideo } from '@videojs/react/media/hlsjs-video';
 import { ArrowLeft, ListVideo } from 'lucide-react';
 import { formatEpisodeTitle } from '@/services/movieApi';
+import { CleanPlaylistLoader } from '@/lib/m3u8Filter';
+import { NextEpisodeCard } from './NextEpisodeCard';
 
 export interface VideoJsPlayerProps {
   src: string;
@@ -22,6 +24,8 @@ export interface VideoJsPlayerProps {
   onEnded?: () => void;
   onError?: (e: any) => void;
   className?: string;
+  nextEpisode?: { slug?: string; name: string; embed?: string; m3u8?: string } | null;
+  onPlayNextEpisode?: () => void;
 }
 
 /**
@@ -290,9 +294,58 @@ export const VideoJsPlayer: React.FC<VideoJsPlayerProps> = ({
   onEnded,
   onError,
   className = '',
+  nextEpisode,
+  onPlayNextEpisode,
 }) => {
   const isHls = src.includes('.m3u8') || src.includes('m3u8');
   const hasSeekedRef = useRef(false);
+
+  // Local state for exact time monitoring passed to NextEpisodeCard
+  const [currentTime, setCurrentTime] = useState(0);
+  const [duration, setDuration] = useState(0);
+
+  // Determine effective next episode: use passed nextEpisode or derive from episodes list
+  const effectiveNextEpisode = useMemo(() => {
+    if (nextEpisode !== undefined) return nextEpisode;
+    if (!episodes || episodes.length <= 1) return null;
+    const currentFormatted = formatEpisodeTitle(currentEpisodeTitle || episodeTitle || '');
+    const currentIndex = episodes.findIndex(
+      (ep) => formatEpisodeTitle(ep.name) === currentFormatted
+    );
+    if (currentIndex >= 0 && currentIndex + 1 < episodes.length) {
+      return episodes[currentIndex + 1];
+    }
+    return null;
+  }, [nextEpisode, episodes, currentEpisodeTitle, episodeTitle]);
+
+  const handlePlayNext = useCallback(() => {
+    if (onPlayNextEpisode) {
+      onPlayNextEpisode();
+    } else if (effectiveNextEpisode && onSelectEpisode) {
+      onSelectEpisode(
+        effectiveNextEpisode.embed,
+        formatEpisodeTitle(effectiveNextEpisode.name),
+        effectiveNextEpisode.m3u8
+      );
+    }
+  }, [onPlayNextEpisode, effectiveNextEpisode, onSelectEpisode]);
+
+  // Configure HLS source with CleanPlaylistLoader to strip in-stream gambling ads in RAM (ERR-15)
+  const hlsSource = useMemo(() => {
+    return {
+      src,
+      type: 'application/vnd.apple.mpegurl',
+      preferPlayback: 'mse' as const,
+      engine: {
+        hlsJs: {
+          enableWorker: true,
+          lowLatencyMode: false,
+          backBufferLength: 90,
+          pLoader: CleanPlaylistLoader as any,
+        },
+      },
+    };
+  }, [src]);
 
   useEffect(() => {
     hasSeekedRef.current = false;
@@ -300,6 +353,9 @@ export const VideoJsPlayer: React.FC<VideoJsPlayerProps> = ({
 
   const handleLoadedMetadata = (e: React.SyntheticEvent<HTMLVideoElement>) => {
     const video = e.currentTarget;
+    if (video.duration && !isNaN(video.duration)) {
+      setDuration(video.duration);
+    }
     if (!hasSeekedRef.current && initialTime > 5 && video.duration > initialTime) {
       hasSeekedRef.current = true;
       try {
@@ -310,8 +366,16 @@ export const VideoJsPlayer: React.FC<VideoJsPlayerProps> = ({
 
   const handleTimeUpdate = (e: React.SyntheticEvent<HTMLVideoElement>) => {
     const video = e.currentTarget;
-    if (onTimeUpdate && video.duration && !isNaN(video.duration)) {
-      onTimeUpdate(video.currentTime, video.duration);
+    if (video.currentTime) {
+      setCurrentTime(video.currentTime);
+    }
+    if (video.duration && !isNaN(video.duration)) {
+      setDuration(video.duration);
+      if (onTimeUpdate) {
+        onTimeUpdate(video.currentTime, video.duration);
+      }
+    } else if (onTimeUpdate) {
+      onTimeUpdate(video.currentTime, 0);
     }
   };
 
@@ -323,6 +387,7 @@ export const VideoJsPlayer: React.FC<VideoJsPlayerProps> = ({
           {isHls ? (
             <HlsJsVideo
               src={src}
+              source={hlsSource}
               poster={poster}
               autoPlay
               playsInline
@@ -358,6 +423,17 @@ export const VideoJsPlayer: React.FC<VideoJsPlayerProps> = ({
             currentEpisodeTitle={currentEpisodeTitle}
             onSelectEpisode={onSelectEpisode}
           />
+
+          {/* Netflix-Style Liquid Glass Next Episode Floating Card (ERR-16 / Obsidian 03.4 spec) */}
+          {effectiveNextEpisode && (
+            <NextEpisodeCard
+              nextEpisode={effectiveNextEpisode}
+              movieTitle={title}
+              onPlayNext={handlePlayNext}
+              currentTimeOverride={currentTime}
+              durationOverride={duration}
+            />
+          )}
         </VideoSkin>
       </VideoPlayer>
     </div>

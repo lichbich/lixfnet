@@ -4,12 +4,19 @@
  * (e.g. 9922.com, Jun88, OKVIP, /v8/ segments) from HLS stream manifests.
  */
 
+import Hls from 'hls.js';
+
 const AD_SIGNATURES = [
   '/v8/',
   '/v7/',
   '/v9/',
   '/v6/',
+  '/v5/',
+  '/v10/',
+  '/v11/',
   'convertv8',
+  'convertv7',
+  'convertv9',
   'segment_',
   'd61a03b1dabe537cc05ffe5c9c280f56',
   '9922',
@@ -20,6 +27,13 @@ const AD_SIGNATURES = [
   'new88',
   '789bet',
   'okvip',
+  'bet88',
+  'fb88',
+  'bk8',
+  'w88',
+  'dafabet',
+  'm88',
+  'fun88',
 ];
 
 /**
@@ -112,3 +126,30 @@ export function cleanM3u8Manifest(rawText: string): string {
 
   return sanitizedLines.join('\n');
 }
+
+/**
+ * Custom HLS Playlist Loader that intercepts and strips mid-roll gambling ads
+ * directly from the M3U8 manifest in RAM before Hls.js parses fragments.
+ * (Business requirement: ERR-15)
+ */
+export class CleanPlaylistLoader extends (Hls.DefaultConfig?.loader || class {}) {
+  constructor(config: any) {
+    super(config);
+    const origLoad = this.load ? this.load.bind(this) : null;
+    if (origLoad) {
+      this.load = function (context: any, cfg: any, callbacks: any) {
+        const origSuccess = callbacks.onSuccess;
+        callbacks.onSuccess = function (response: any, stats: any, ctx: any, networkDetails: any) {
+          if (response && typeof response.data === 'string') {
+            response.data = cleanM3u8Manifest(response.data);
+          }
+          if (origSuccess) {
+            origSuccess(response, stats, ctx, networkDetails);
+          }
+        };
+        origLoad(context, cfg, callbacks);
+      };
+    }
+  }
+}
+

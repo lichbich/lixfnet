@@ -314,6 +314,8 @@ export const VideoPlayerModal: React.FC = () => {
                 handlePlayNextEpisode();
               }
             }}
+            nextEpisode={nextEpisode}
+            onPlayNextEpisode={handlePlayNextEpisode}
           />
         ) : activeEmbed ? (
           <div className="relative w-full h-full flex items-center justify-center bg-black">
