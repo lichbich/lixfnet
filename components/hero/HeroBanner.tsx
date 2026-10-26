@@ -7,6 +7,7 @@ import { useNetflix } from '@/context/NetflixContext';
 import { Movie } from '@/types';
 import { formatEpisodeTitle } from '@/services/movieApi';
 import { useHdTrailerFrame } from '@/lib/useHdTrailerFrame';
+import { DEFAULT_BACKDROP_IMAGE } from '@/lib/movieUtils';
 
 interface HeroBannerProps {
   movie?: Movie | null;
@@ -250,16 +251,24 @@ export const HeroBanner: React.FC<HeroBannerProps> = ({ movie, badgeText }) => {
       // ignore
     }
 
+    const isMobile =
+      typeof window !== 'undefined' &&
+      (window.innerWidth < 1024 ||
+        window.matchMedia('(hover: none) and (pointer: coarse)').matches ||
+        navigator.maxTouchPoints > 0);
+
     const immediateKey =
       movie.trailerYoutubeKey || (cachedKey && cachedKey !== 'none' ? cachedKey : null);
 
     if (immediateKey) {
       setTrailerKey(immediateKey);
-      trailerTimerRef.current = setTimeout(() => {
-        if (!isCancelled) {
-          setIsTrailerPlaying(true);
-        }
-      }, 1000);
+      if (!isMobile) {
+        trailerTimerRef.current = setTimeout(() => {
+          if (!isCancelled) {
+            setIsTrailerPlaying(true);
+          }
+        }, 1000);
+      }
     } else {
       const qTitle = encodeURIComponent(movie.title || '');
       const qSub = encodeURIComponent(movie.subTitle || '');
@@ -291,12 +300,14 @@ export const HeroBanner: React.FC<HeroBannerProps> = ({ movie, badgeText }) => {
             } catch {
               // ignore
             }
-            // Only start trailer playback if key is verified
-            trailerTimerRef.current = setTimeout(() => {
-              if (!isCancelled) {
-                setIsTrailerPlaying(true);
-              }
-            }, 1000);
+            // Only start trailer playback on desktop
+            if (!isMobile) {
+              trailerTimerRef.current = setTimeout(() => {
+                if (!isCancelled) {
+                  setIsTrailerPlaying(true);
+                }
+              }, 1000);
+            }
           } else {
             // Movie has no trailer: keep clean backdrop poster
             setTrailerKey(null);
@@ -666,7 +677,7 @@ export const HeroBanner: React.FC<HeroBannerProps> = ({ movie, badgeText }) => {
             <div
               className="absolute inset-0 bg-cover bg-center filter blur-3xl scale-125 opacity-70 pointer-events-none transition-all duration-1000"
               style={{
-                backgroundImage: `url('${movie.backdropUrl || movie.posterUrl}')`,
+                backgroundImage: `url('${movie.backdropUrl || movie.posterUrl || DEFAULT_BACKDROP_IMAGE}')`,
               }}
             />
 
@@ -676,7 +687,7 @@ export const HeroBanner: React.FC<HeroBannerProps> = ({ movie, badgeText }) => {
                 isTrailerPlaying && trailerKey && isTrailerReady ? 'opacity-0' : 'opacity-100 group-hover:scale-102'
               }`}
               style={{
-                backgroundImage: `url('${movie.backdropUrl || movie.posterUrl}')`,
+                backgroundImage: `url('${movie.backdropUrl || movie.posterUrl || DEFAULT_BACKDROP_IMAGE}')`,
               }}
             />
 

@@ -1,6 +1,29 @@
 import { Movie, WatchProgress } from '@/types';
 
 /**
+ * Default fallback images for movies without cover or with broken 404 links.
+ * Features an obsidian dark background, film grid texture and titanium gray LIXFNET ribbon logo.
+ */
+export const DEFAULT_BACKDROP_IMAGE = '/images/backdrop-placeholder.svg';
+export const DEFAULT_POSTER_IMAGE = '/images/poster-placeholder.svg';
+
+/**
+ * Returns a guaranteed valid horizontal backdrop URL (16:9) or fallback placeholder
+ */
+export function getSafeBackdropUrl(url?: string | null): string {
+  if (!url || typeof url !== 'string' || !url.trim()) return DEFAULT_BACKDROP_IMAGE;
+  return url.trim();
+}
+
+/**
+ * Returns a guaranteed valid vertical poster URL (2:3) or fallback placeholder
+ */
+export function getSafePosterUrl(url?: string | null): string {
+  if (!url || typeof url !== 'string' || !url.trim()) return DEFAULT_POSTER_IMAGE;
+  return url.trim();
+}
+
+/**
  * Strips Vietnamese diacritics, punctuation and normalizes spaces for reliable comparison.
  */
 export function normalizeTitle(str?: string): string {

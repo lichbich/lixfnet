@@ -16,7 +16,7 @@ import { RatingBadge, QualityBadge, Top10Badge } from '@/components/ui/Badge';
 import { NetflixRibbonN } from '@/components/ui/NetflixLogo';
 import { clientLogoCache } from '@/services/logoService';
 import { formatEpisodeTitle } from '@/services/movieApi';
-import { getCanonicalMovieId, findNextEpisodeTarget } from '@/lib/movieUtils';
+import { getCanonicalMovieId, findNextEpisodeTarget, DEFAULT_BACKDROP_IMAGE } from '@/lib/movieUtils';
 import { useHdTrailerFrame } from '@/lib/useHdTrailerFrame';
 
 export const HoverPopoutCard: React.FC = () => {
@@ -115,6 +115,8 @@ export const HoverPopoutCard: React.FC = () => {
   useEffect(() => {
     if (isModalOpen) {
       setIsOpen(false);
+      setActiveMovie(null);
+      setActiveRect(null);
       setIsTrailerPlaying(false);
       setIsTrailerReady(false);
       if (trailerTimerRef.current) {
@@ -417,7 +419,14 @@ export const HoverPopoutCard: React.FC = () => {
     };
   }, []);
 
-  if (!activeMovie || !activeRect) return null;
+  // Check if touch / mobile device or if modal is open
+  const isTouchDevice =
+    typeof window !== 'undefined' &&
+    (window.matchMedia('(hover: none) and (pointer: coarse)').matches ||
+      window.innerWidth < 1024 ||
+      navigator.maxTouchPoints > 0);
+
+  if (isTouchDevice || isModalOpen || !activeMovie || !activeRect) return null;
 
   const inList = isInMyList(activeMovie.id, activeMovie);
   const watchProgress = getWatchProgress(activeMovie.slug || activeMovie.id, activeMovie);
@@ -495,7 +504,7 @@ export const HoverPopoutCard: React.FC = () => {
     openModal({ ...activeMovie, logoUrl: logoUrl || activeMovie.logoUrl });
   };
 
-  const mainImage = activeMovie.backdropUrl || activeMovie.posterUrl;
+  const mainImage = activeMovie.backdropUrl || activeMovie.posterUrl || DEFAULT_BACKDROP_IMAGE;
 
   return (
     <div
@@ -536,6 +545,12 @@ export const HoverPopoutCard: React.FC = () => {
           key={`img-${activeMovie.id}`}
           src={mainImage}
           alt={activeMovie.title}
+          onError={(e) => {
+            const img = e.currentTarget;
+            if (!img.src.endsWith(DEFAULT_BACKDROP_IMAGE)) {
+              img.src = DEFAULT_BACKDROP_IMAGE;
+            }
+          }}
           className={`relative w-full h-full object-cover object-top transition-all duration-700 ${
             isTrailerPlaying && trailerKey && isTrailerReady
               ? 'opacity-0 scale-100'

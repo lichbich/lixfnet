@@ -5,6 +5,7 @@ import { Play, Plus, Check, ThumbsUp, ChevronDown } from 'lucide-react';
 import { Movie } from '@/types';
 import { Top10Badge, RatingBadge } from '@/components/ui/Badge';
 import { useNetflix } from '@/context/NetflixContext';
+import { DEFAULT_BACKDROP_IMAGE, DEFAULT_POSTER_IMAGE } from '@/lib/movieUtils';
 
 interface MovieCardProps {
   movie: Movie;
@@ -33,6 +34,13 @@ export const MovieCard = React.memo<MovieCardProps>(({
   const cardRef = useRef<HTMLDivElement>(null);
 
   const handleMouseEnter = () => {
+    if (typeof window !== 'undefined') {
+      const isTouch =
+        window.matchMedia('(hover: none) and (pointer: coarse)').matches ||
+        window.innerWidth < 1024 ||
+        navigator.maxTouchPoints > 0;
+      if (isTouch) return;
+    }
     if (cardRef.current) {
       const rect = cardRef.current.getBoundingClientRect();
       onCardHover(movie, rect);
@@ -44,9 +52,10 @@ export const MovieCard = React.memo<MovieCardProps>(({
   };
 
   const isPortrait = variant === 'portrait';
-  const mainImage = isPortrait
+  const fallbackImage = isPortrait ? DEFAULT_POSTER_IMAGE : DEFAULT_BACKDROP_IMAGE;
+  const mainImage = (isPortrait
     ? movie.posterUrl || movie.backdropUrl
-    : movie.backdropUrl || movie.posterUrl;
+    : movie.backdropUrl || movie.posterUrl) || fallbackImage;
 
   const sizeClasses = fillWidth
     ? isPortrait
@@ -62,11 +71,11 @@ export const MovieCard = React.memo<MovieCardProps>(({
       onClick={() => openModal(movie)}
       onMouseEnter={handleMouseEnter}
       onMouseLeave={handleMouseLeave}
-      className={`relative flex-shrink-0 rounded-md sm:rounded-lg overflow-hidden bg-zinc-800 shadow-md border border-white/5 cursor-pointer group select-none transition-[border-color,box-shadow] duration-200 ease-out hover:border-white/40 hover:shadow-2xl ${sizeClasses} ${className}`}
+      className={`relative flex-shrink-0 rounded-md sm:rounded-lg overflow-hidden bg-zinc-800 shadow-md border border-white/5 cursor-pointer group select-none transition-[border-color,box-shadow] duration-200 ease-out md:hover:border-white/40 md:hover:shadow-2xl ${sizeClasses} ${className}`}
     >
-      {/* Smart Adaptive Ambient Blur Layer */}
+      {/* Smart Adaptive Ambient Blur Layer - Hidden on mobile/tablet to eliminate GPU lag */}
       <div
-        className="absolute inset-0 bg-cover bg-center filter blur-md scale-110 opacity-30 pointer-events-none"
+        className="hidden md:block absolute inset-0 bg-cover bg-center filter blur-md scale-110 opacity-30 pointer-events-none"
         style={{ backgroundImage: `url('${mainImage}')` }}
       />
 
@@ -75,7 +84,13 @@ export const MovieCard = React.memo<MovieCardProps>(({
         src={mainImage}
         alt={movie.title}
         loading="lazy"
-        className="relative w-full h-full object-cover object-top group-hover:scale-105 transition-transform duration-500 ease-out will-change-transform"
+        onError={(e) => {
+          const img = e.currentTarget;
+          if (!img.src.endsWith(fallbackImage)) {
+            img.src = fallbackImage;
+          }
+        }}
+        className="relative w-full h-full object-cover object-top md:group-hover:scale-105 transition-transform duration-500 ease-out will-change-transform"
       />
 
       {/* Top 10 badge */}
@@ -101,8 +116,8 @@ export const MovieCard = React.memo<MovieCardProps>(({
       )}
 
       {/* Normal Gradient & Bottom Title */}
-      <div className="absolute inset-0 bg-gradient-to-t from-black/90 via-black/25 to-transparent transition-opacity group-hover:opacity-0" />
-      <div className="absolute bottom-2 left-2.5 right-2.5 transition-opacity group-hover:opacity-0">
+      <div className="absolute inset-0 bg-gradient-to-t from-black/90 via-black/25 to-transparent transition-opacity md:group-hover:opacity-0" />
+      <div className="absolute bottom-2 left-2.5 right-2.5 transition-opacity md:group-hover:opacity-0">
         <h4 className="text-white font-bold text-xs sm:text-sm drop-shadow line-clamp-1 uppercase">
           {movie.title}
         </h4>
@@ -113,8 +128,8 @@ export const MovieCard = React.memo<MovieCardProps>(({
         )}
       </div>
 
-      {/* Hover Info Overlay */}
-      <div className="absolute inset-0 bg-gradient-to-t from-black/95 via-black/85 to-black/40 p-2.5 sm:p-3 flex flex-col justify-between opacity-0 group-hover:opacity-100 transition-opacity duration-200">
+      {/* Hover Info Overlay - Desktop Mouse Hover Only */}
+      <div className="hidden md:flex absolute inset-0 bg-gradient-to-t from-black/95 via-black/85 to-black/40 p-2.5 sm:p-3 flex-col justify-between opacity-0 group-hover:opacity-100 transition-opacity duration-200">
         {/* Top actions */}
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-1.5">

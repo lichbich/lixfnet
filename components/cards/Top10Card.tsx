@@ -5,6 +5,7 @@ import { Movie } from '@/types';
 import { StatusBadge, Top10Badge } from '@/components/ui/Badge';
 import { Top10Number } from '@/components/ui/Top10Number';
 import { useNetflix } from '@/context/NetflixContext';
+import { DEFAULT_POSTER_IMAGE } from '@/lib/movieUtils';
 
 interface Top10CardProps {
   movie: Movie;
@@ -16,6 +17,13 @@ export const Top10Card: React.FC<Top10CardProps> = ({ movie, rank }) => {
   const cardRef = useRef<HTMLDivElement>(null);
 
   const handleMouseEnter = () => {
+    if (typeof window !== 'undefined') {
+      const isTouch =
+        window.matchMedia('(hover: none) and (pointer: coarse)').matches ||
+        window.innerWidth < 1024 ||
+        navigator.maxTouchPoints > 0;
+      if (isTouch) return;
+    }
     if (cardRef.current) {
       const rect = cardRef.current.getBoundingClientRect();
       onCardHover(movie, rect);
@@ -55,9 +63,15 @@ export const Top10Card: React.FC<Top10CardProps> = ({ movie, rank }) => {
         )}
 
         <img
-          src={movie.posterUrl}
+          src={movie.posterUrl || DEFAULT_POSTER_IMAGE}
           alt={movie.title}
           loading="lazy"
+          onError={(e) => {
+            const img = e.currentTarget;
+            if (!img.src.endsWith(DEFAULT_POSTER_IMAGE)) {
+              img.src = DEFAULT_POSTER_IMAGE;
+            }
+          }}
           className="w-full h-full object-cover group-hover:scale-103 transition-transform duration-700 ease-out"
         />
 

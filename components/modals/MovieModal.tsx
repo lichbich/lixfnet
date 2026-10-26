@@ -19,7 +19,7 @@ import { useNetflix } from '@/context/NetflixContext';
 import { getSimilarMovies, formatEpisodeTitle } from '@/services/movieApi';
 import { getMovieCollection, MovieCollection } from '@/services/collectionService';
 import { clientLogoCache } from '@/services/logoService';
-import { getCanonicalMovieId, isSameMovie, cleanMovieDescription, findNextEpisodeTarget } from '@/lib/movieUtils';
+import { getCanonicalMovieId, isSameMovie, cleanMovieDescription, findNextEpisodeTarget, DEFAULT_BACKDROP_IMAGE } from '@/lib/movieUtils';
 import {
   TmdbEpisodeMeta,
   fetchTmdbEpisodes,
@@ -68,6 +68,7 @@ export const MovieModal: React.FC = () => {
   const dropdownMenuRef = useRef<HTMLDivElement>(null);
   const [tmdbEpisodes, setTmdbEpisodes] = useState<TmdbEpisodeMeta[]>([]);
   const [isLoadingTmdbEpisodes, setIsLoadingTmdbEpisodes] = useState(false);
+  const [isDescriptionExpanded, setIsDescriptionExpanded] = useState(false);
 
   // Smooth enter & exit animation state
   const [displayedMovie, setDisplayedMovie] = useState<Movie | null>(selectedMovie);
@@ -103,6 +104,7 @@ export const MovieModal: React.FC = () => {
       }
 
       setDisplayedMovie(selectedMovie);
+      setIsDescriptionExpanded(false);
 
       // Only re-initialize logo if switching to a totally new movie
       if (isDifferentMovie) {
@@ -177,8 +179,15 @@ export const MovieModal: React.FC = () => {
     let isCancelled = false;
     const movieSlug = displayedMovie.slug || displayedMovie.id;
 
-    // Start trailer swiftly after 800ms of opening modal
+    const isMobileDevice =
+      typeof window !== 'undefined' &&
+      (window.innerWidth < 1024 ||
+        window.matchMedia('(hover: none) and (pointer: coarse)').matches ||
+        navigator.maxTouchPoints > 0);
+
+    // Start trailer swiftly after 800ms of opening modal (Desktop Only)
     const startTrailer = () => {
+      if (isMobileDevice) return; // Prevent heavy autoplay on mobile
       if (idleTimerRef.current) clearTimeout(idleTimerRef.current);
       idleTimerRef.current = setTimeout(() => {
         if (!isCancelled) {
@@ -420,6 +429,7 @@ export const MovieModal: React.FC = () => {
     if (idleTimerRef.current) clearTimeout(idleTimerRef.current);
     setIsTrailerPlaying(false);
     setIsTrailerReady(false);
+    setIsDescriptionExpanded(false);
     setIsOpen(false);
     exitTimerRef.current = setTimeout(() => {
       closeModal();
@@ -757,13 +767,13 @@ export const MovieModal: React.FC = () => {
         <button
           onClick={handleClose}
           aria-label="Đóng"
-          className="absolute top-4 right-4 z-30 w-9 h-9 rounded-full bg-[#181818]/80 hover:bg-[#181818] border border-white/20 text-white flex items-center justify-center transition-all hover:scale-110 shadow-lg"
+          className="absolute top-3 right-3 sm:top-4 sm:right-4 z-30 w-8 h-8 sm:w-9 sm:h-9 rounded-full bg-[#181818]/80 hover:bg-[#181818] border border-white/20 text-white flex items-center justify-center transition-all hover:scale-110 shadow-lg cursor-pointer"
         >
-          <X className="w-5 h-5" />
+          <X className="w-4 h-4 sm:w-5 sm:h-5" />
         </button>
 
         {/* Backdrop Banner Header */}
-        <div className="relative aspect-[16/9] w-full max-h-[460px] bg-zinc-900 overflow-hidden">
+        <div className="relative aspect-[16/10] sm:aspect-[16/9] w-full max-h-[460px] bg-zinc-900 overflow-hidden">
           {/* Ambient blurred backdrop layer */}
           <div
             className="absolute inset-0 bg-cover bg-center filter blur-xl scale-110 opacity-40 pointer-events-none"
@@ -772,8 +782,14 @@ export const MovieModal: React.FC = () => {
             }}
           />
           <img
-            src={movie.backdropUrl || movie.posterUrl}
+            src={movie.backdropUrl || movie.posterUrl || DEFAULT_BACKDROP_IMAGE}
             alt={movie.title}
+            onError={(e) => {
+              const img = e.currentTarget;
+              if (!img.src.endsWith(DEFAULT_BACKDROP_IMAGE)) {
+                img.src = DEFAULT_BACKDROP_IMAGE;
+              }
+            }}
             className={`relative w-full h-full object-cover object-top transition-opacity duration-1000 ${
               isTrailerPlaying && trailerKey && isTrailerReady ? 'opacity-0' : 'opacity-100'
             }`}
@@ -867,10 +883,10 @@ export const MovieModal: React.FC = () => {
           <div className="absolute inset-0 bg-gradient-to-r from-black/60 via-transparent to-transparent pointer-events-none" />
 
           {/* Banner Controls & Title */}
-          <div className="absolute bottom-8 left-6 sm:left-10 right-6 sm:right-10 flex items-end justify-between">
-            <div className="max-w-xl">
+          <div className="absolute bottom-3 sm:bottom-8 left-3.5 sm:left-10 right-3.5 sm:right-10 flex items-end justify-between">
+            <div className="w-full sm:max-w-xl">
             {/* Title Display with CSS Grid Stacking (Zero vertical layout shift) */}
-            <div className="grid grid-cols-1 grid-rows-1 items-end mb-3">
+            <div className="grid grid-cols-1 grid-rows-1 items-end mb-2 sm:mb-3">
               {/* Layer 1: Plain text title */}
               <div
                 style={{ gridArea: '1 / 1 / 2 / 2' }}
@@ -880,11 +896,11 @@ export const MovieModal: React.FC = () => {
                     : 'opacity-100'
                 }`}
               >
-                <h1 className="text-3xl sm:text-4xl md:text-5xl font-black uppercase tracking-tight drop-shadow-lg text-white">
+                <h1 className="text-xl xs:text-2xl sm:text-4xl md:text-5xl font-black uppercase tracking-tight drop-shadow-lg text-white">
                   {movie.title}
                 </h1>
                 {movie.subTitle && (
-                  <p className="text-sm sm:text-base text-zinc-300 font-semibold tracking-wider uppercase mt-1 drop-shadow">
+                  <p className="text-xs sm:text-base text-zinc-300 font-semibold tracking-wider uppercase mt-0.5 sm:mt-1 drop-shadow">
                     {movie.subTitle}
                   </p>
                 )}
@@ -894,7 +910,7 @@ export const MovieModal: React.FC = () => {
               {logoUrl && (
                 <div
                   style={{ gridArea: '1 / 1 / 2 / 2' }}
-                  className={`relative w-fit max-w-[260px] sm:max-w-[380px] md:max-w-[460px] transition-opacity duration-500 ease-in-out ${
+                  className={`relative w-fit max-w-[190px] xs:max-w-[240px] sm:max-w-[380px] md:max-w-[460px] transition-opacity duration-500 ease-in-out ${
                     isLogoLoaded
                       ? 'opacity-100'
                       : 'opacity-0 pointer-events-none'
@@ -913,11 +929,11 @@ export const MovieModal: React.FC = () => {
                       setLogoUrl(null);
                       setIsLogoLoaded(false);
                     }}
-                    className="max-h-20 sm:max-h-28 md:max-h-36 w-auto object-contain select-none pointer-events-none transition-transform duration-500 hover:scale-105"
+                    className="max-h-12 xs:max-h-14 sm:max-h-28 md:max-h-36 w-auto object-contain select-none pointer-events-none transition-transform duration-500 hover:scale-105"
                     style={{ filter: 'drop-shadow(0 0 1.5px rgba(255, 255, 255, 0.7)) drop-shadow(0 4px 16px rgba(0, 0, 0, 0.95))' }}
                   />
                   {movie.subTitle && (
-                    <p className="text-xs sm:text-sm text-zinc-300 font-semibold tracking-wider uppercase mt-1 drop-shadow">
+                    <p className="text-[10px] sm:text-sm text-zinc-300 font-semibold tracking-wider uppercase mt-0.5 sm:mt-1 drop-shadow">
                       {movie.subTitle}
                     </p>
                   )}
@@ -926,13 +942,13 @@ export const MovieModal: React.FC = () => {
             </div>
 
               {/* Action Buttons & In-Progress Bar */}
-              <div className="flex flex-col sm:flex-row sm:items-center gap-3 mt-4">
-                <div className="flex items-center gap-3">
+              <div className="flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-3 mt-2 sm:mt-4">
+                <div className="flex items-center gap-2 sm:gap-3">
                   <button
                     onClick={handlePlayOrResume}
-                    className="flex items-center gap-2 bg-white text-black font-bold px-6 py-2.5 rounded-md hover:bg-white/90 active:scale-95 transition shadow-lg text-sm sm:text-base group"
+                    className="flex items-center gap-1.5 sm:gap-2 bg-white text-black font-bold px-3.5 py-1.5 sm:px-6 sm:py-2.5 rounded-md hover:bg-white/90 active:scale-95 transition shadow-lg text-xs sm:text-base group whitespace-nowrap cursor-pointer"
                   >
-                    <Play className="w-5 h-5 fill-black" />
+                    <Play className="w-4 h-4 sm:w-5 sm:h-5 fill-black shrink-0" />
                     <span>
                       {!hasStreamUrl
                         ? 'Xem Trailer'
@@ -947,32 +963,32 @@ export const MovieModal: React.FC = () => {
                   <button
                     onClick={() => toggleMyList(movie)}
                     aria-label={inList ? 'Xóa khỏi danh sách' : 'Thêm vào danh sách'}
-                    className="w-10 h-10 rounded-full border-2 border-white/40 bg-zinc-900/60 hover:border-white text-white flex items-center justify-center active:scale-95 transition"
+                    className="w-8 h-8 sm:w-10 sm:h-10 rounded-full border border-white/40 sm:border-2 bg-zinc-900/60 hover:border-white text-white flex items-center justify-center active:scale-95 transition shrink-0 cursor-pointer"
                   >
-                    {inList ? <Check className="w-5 h-5 text-green-400" /> : <Plus className="w-5 h-5" />}
+                    {inList ? <Check className="w-4 h-4 sm:w-5 sm:h-5 text-green-400" /> : <Plus className="w-4 h-4 sm:w-5 sm:h-5" />}
                   </button>
 
                   <button
                     onClick={() => setIsLiked(!isLiked)}
                     aria-label="Thích"
-                    className={`w-10 h-10 rounded-full border-2 border-white/40 bg-zinc-900/60 hover:border-white flex items-center justify-center active:scale-95 transition ${
+                    className={`w-8 h-8 sm:w-10 sm:h-10 rounded-full border border-white/40 sm:border-2 bg-zinc-900/60 hover:border-white flex items-center justify-center active:scale-95 transition shrink-0 cursor-pointer ${
                       isLiked ? 'text-blue-400 border-blue-400' : 'text-white'
                     }`}
                   >
-                    <ThumbsUp className="w-5 h-5" />
+                    <ThumbsUp className="w-4 h-4 sm:w-5 sm:h-5" />
                   </button>
                 </div>
 
                 {/* Progress pill if user has watched */}
                 {watchProgress && !nextEpisodeTarget && (
-                  <div className="flex items-center gap-2.5 bg-black/60 backdrop-blur-md px-3 py-1.5 rounded-lg border border-white/10 max-w-fit shadow-md">
-                    <div className="w-20 sm:w-28 bg-zinc-700/80 h-1.5 rounded-full overflow-hidden">
+                  <div className="flex items-center gap-2 bg-black/70 backdrop-blur-md px-2.5 py-1 sm:px-3 sm:py-1.5 rounded-md sm:rounded-lg border border-white/10 max-w-fit shadow-md">
+                    <div className="w-16 sm:w-28 bg-zinc-700/80 h-1 sm:h-1.5 rounded-full overflow-hidden">
                       <div
                         className="bg-[#E50914] h-full rounded-full transition-all duration-300"
                         style={{ width: `${watchProgress.progressPercent}%` }}
                       />
                     </div>
-                    <span className="text-xs text-zinc-300 font-semibold whitespace-nowrap">
+                    <span className="text-[10px] sm:text-xs text-zinc-300 font-semibold whitespace-nowrap">
                       {formatEpisodeLabel(watchProgress.episodeTitle || 'Tập 1')} • {Math.round(watchProgress.currentTime / 60)}/{epDurationMinutes}ph
                     </span>
                   </div>
@@ -980,9 +996,9 @@ export const MovieModal: React.FC = () => {
 
                 {/* New episode announced pill */}
                 {nextEpisodeTarget && (
-                  <div className="flex items-center gap-2 bg-[#E50914]/20 border border-[#E50914]/40 px-3 py-1.5 rounded-lg max-w-fit shadow-md">
-                    <span className="w-2 h-2 rounded-full bg-[#E50914] animate-pulse" />
-                    <span className="text-xs text-white font-bold whitespace-nowrap">
+                  <div className="flex items-center gap-1.5 sm:gap-2 bg-[#E50914]/20 border border-[#E50914]/40 px-2.5 py-1 sm:px-3 sm:py-1.5 rounded-md sm:rounded-lg max-w-fit shadow-md">
+                    <span className="w-1.5 h-1.5 sm:w-2 sm:h-2 rounded-full bg-[#E50914] animate-pulse" />
+                    <span className="text-[11px] sm:text-xs text-white font-bold whitespace-nowrap">
                       Tập mới: {nextEpisodeTarget.episodeTitle}
                     </span>
                   </div>
@@ -990,8 +1006,8 @@ export const MovieModal: React.FC = () => {
               </div>
             </div>
 
-            {/* Interactive Liquid Glass Volume & Mute Controller */}
-            <div className="relative group/vol flex items-center">
+            {/* Interactive Liquid Glass Volume & Mute Controller (Hidden on mobile) */}
+            <div className="hidden sm:flex relative group/vol items-center">
               <div className="flex items-center gap-2.5 h-10 px-2 rounded-full border border-white/30 bg-black/50 hover:bg-black/70 backdrop-blur-xl shadow-[inset_0_1px_1px_rgba(255,255,255,0.3),0_8px_24px_rgba(0,0,0,0.5)] transition-all duration-300">
                 <button
                   onClick={toggleMute}
@@ -1063,9 +1079,36 @@ export const MovieModal: React.FC = () => {
                 </div>
               )}
 
-              <p className="text-sm sm:text-base text-zinc-200 leading-relaxed font-normal">
-                {cleanMovieDescription(movie.description)}
-              </p>
+              {/* Movie Description: 3-line clamp on mobile with Xem thêm / Thu gọn toggle */}
+              {(() => {
+                const desc = cleanMovieDescription(movie.description);
+                const isLong = desc.length > 130;
+                return (
+                  <div className="space-y-1.5">
+                    <p
+                      className={`text-xs sm:text-sm md:text-base text-zinc-200 leading-relaxed font-normal ${
+                        !isDescriptionExpanded ? 'line-clamp-3' : ''
+                      }`}
+                    >
+                      {desc}
+                    </p>
+                    {isLong && (
+                      <button
+                        type="button"
+                        onClick={() => setIsDescriptionExpanded((prev) => !prev)}
+                        className="inline-flex items-center gap-1 text-xs sm:text-sm font-semibold text-zinc-400 hover:text-white transition cursor-pointer select-none pt-0.5 active:scale-95"
+                      >
+                        <span>{isDescriptionExpanded ? 'Thu gọn' : 'Xem thêm'}</span>
+                        <ChevronDown
+                          className={`w-3.5 h-3.5 transition-transform duration-200 ${
+                            isDescriptionExpanded ? 'rotate-180' : ''
+                          }`}
+                        />
+                      </button>
+                    )}
+                  </div>
+                );
+              })()}
             </div>
 
             {/* Right col: Cast, Genres, Director */}
@@ -1487,8 +1530,14 @@ export const MovieModal: React.FC = () => {
                       {/* 16:9 Thumbnail Header */}
                       <div className="relative aspect-video w-full overflow-hidden bg-zinc-800">
                         <img
-                          src={colMovie.backdropUrl || colMovie.posterUrl}
+                          src={colMovie.backdropUrl || colMovie.posterUrl || DEFAULT_BACKDROP_IMAGE}
                           alt={colMovie.title}
+                          onError={(e) => {
+                            const img = e.currentTarget;
+                            if (!img.src.endsWith(DEFAULT_BACKDROP_IMAGE)) {
+                              img.src = DEFAULT_BACKDROP_IMAGE;
+                            }
+                          }}
                           className="w-full h-full object-cover object-top group-hover:scale-105 transition duration-300"
                         />
                         <div className="absolute inset-0 bg-gradient-to-t from-[#202020] via-transparent to-black/30 pointer-events-none" />
@@ -1616,8 +1665,14 @@ export const MovieModal: React.FC = () => {
                           style={{ backgroundImage: `url('${simMovie.backdropUrl || simMovie.posterUrl}')` }}
                         />
                         <img
-                          src={simMovie.backdropUrl || simMovie.posterUrl}
+                          src={simMovie.backdropUrl || simMovie.posterUrl || DEFAULT_BACKDROP_IMAGE}
                           alt={simMovie.title}
+                          onError={(e) => {
+                            const img = e.currentTarget;
+                            if (!img.src.endsWith(DEFAULT_BACKDROP_IMAGE)) {
+                              img.src = DEFAULT_BACKDROP_IMAGE;
+                            }
+                          }}
                           className="relative w-full h-full object-cover object-top group-hover:scale-105 transition duration-300"
                         />
                         <div className="absolute top-2 right-2 bg-black/70 px-1.5 py-0.5 rounded text-[11px] font-bold text-zinc-300">

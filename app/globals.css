@@ -117,3 +117,21 @@ input:-webkit-autofill:active {
   transition: background-color 5000s ease-in-out 0s;
 }
 
+/* Video.js skin responsive enhancements & fullscreen viewport locks */
+.media-skin {
+  width: 100% !important;
+  height: 100% !important;
+}
+
+:fullscreen,
+:-webkit-full-screen {
+  width: 100vw !important;
+  height: 100vh !important;
+}
+
+.media-skin:fullscreen {
+  width: 100vw !important;
+  height: 100vh !important;
+  background-color: #000 !important;
+}
+

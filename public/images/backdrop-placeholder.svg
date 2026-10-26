@@ -1,0 +1,87 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 720" width="1280" height="720">
+  <defs>
+    <!-- Background Gradients -->
+    <linearGradient id="bg-grad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stopColor="#0a0a0c" />
+      <stop offset="50%" stopColor="#141417" />
+      <stop offset="100%" stopColor="#08080a" />
+    </linearGradient>
+    <radialGradient id="center-glow" cx="50%" cy="48%" r="60%">
+      <stop offset="0%" stopColor="#27272a" stopOpacity="0.45" />
+      <stop offset="55%" stopColor="#18181b" stopOpacity="0.12" />
+      <stop offset="100%" stopColor="#09090b" stopOpacity="0" />
+    </radialGradient>
+    <linearGradient id="ribbon-gray-l" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stopColor="#8e8e93" />
+      <stop offset="100%" stopColor="#48484a" />
+    </linearGradient>
+    <linearGradient id="text-grad-gray" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stopColor="#636366" />
+      <stop offset="50%" stopColor="#aeaeb2" />
+      <stop offset="100%" stopColor="#636366" />
+    </linearGradient>
+    <!-- Subtle Film Texture Grid -->
+    <pattern id="cinema-grid" width="48" height="48" patternUnits="userSpaceOnUse">
+      <path d="M 48 0 L 0 0 0 48" fill="none" stroke="#27272a" stroke-width="0.8" stroke-opacity="0.18" />
+    </pattern>
+    <!-- Shadow Filter -->
+    <filter id="logo-shadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="6" stdDeviation="12" floodColor="#000" floodOpacity="0.8" />
+    </filter>
+  </defs>
+
+  <!-- Background Base with subtle cinematic texture -->
+  <rect width="1280" height="720" fill="url(#bg-grad)" />
+  <rect width="1280" height="720" fill="url(#center-glow)" />
+  <rect width="1280" height="720" fill="url(#cinema-grid)" />
+
+  <!-- Subtle Cinematic Inner Frame -->
+  <rect x="28" y="28" width="1224" height="664" rx="16" fill="none" stroke="#2c2c2e" stroke-width="1.2" stroke-opacity="0.4" />
+
+  <!-- Center Artwork -->
+  <g transform="translate(640, 310)" filter="url(#logo-shadow)">
+    <!-- Folded Ribbon L Icon in Matte Titanium Gray (Scaled 3.6x) -->
+    <g transform="translate(-36, -56) scale(3.6)">
+      <!-- Back vertical ribbon base -->
+      <path d="M0 0 H5.2 V24.5 C3.5 24.8 1.8 25.1 0 25.4 Z" fill="#2c2c2e" />
+      <!-- Front vertical ribbon overlay -->
+      <path d="M0 0 H5.2 V20.5 H0 Z" fill="#3a3a3c" />
+      <!-- Horizontal bottom ribbon with 3D fold -->
+      <path d="M0 19.5 H19.5 V26 C13 27 6.5 27.2 0 26.4 Z" fill="url(#ribbon-gray-l)" />
+    </g>
+
+    <!-- Brand Typography LIXFNET -->
+    <text
+      x="0"
+      y="110"
+      text-anchor="middle"
+      fill="url(#text-grad-gray)"
+      font-family="system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', sans-serif"
+      font-size="44"
+      font-weight="900"
+      letter-spacing="9px"
+    >
+      LIXFNET
+    </text>
+
+    <!-- Subtitle: Image Placeholder Indicator -->
+    <g transform="translate(0, 150)">
+      <!-- Minimalist Film Icon -->
+      <rect x="-110" y="-14" width="220" height="28" rx="14" fill="#1c1c1e" stroke="#2c2c2e" stroke-width="1" />
+      <circle cx="-85" cy="0" r="3.5" fill="#48484a" />
+      <text
+        x="6"
+        y="4"
+        text-anchor="middle"
+        fill="#8e8e93"
+        font-family="system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif"
+        font-size="12"
+        font-weight="700"
+        letter-spacing="2px"
+      >
+        CHƯA CÓ HÌNH BÌA
+      </text>
+      <circle cx="85" cy="0" r="3.5" fill="#48484a" />
+    </g>
+  </g>
+</svg>

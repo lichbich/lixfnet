@@ -2,6 +2,7 @@
 
 import React from 'react';
 import { Play, Check, CalendarClock } from 'lucide-react';
+import { DEFAULT_BACKDROP_IMAGE } from '@/lib/movieUtils';
 
 export interface EpisodeRowProps {
   number: string | number;
@@ -36,7 +37,8 @@ export const EpisodeRow: React.FC<EpisodeRowProps> = ({
   upcomingLabel,
   onClick,
 }) => {
-  const src = thumbnail || fallbackThumbnail;
+  const safeFallback = fallbackThumbnail || DEFAULT_BACKDROP_IMAGE;
+  const src = thumbnail || safeFallback;
   const percent = Math.min(100, Math.max(0, progressPercent));
 
   return (
@@ -73,7 +75,7 @@ export const EpisodeRow: React.FC<EpisodeRowProps> = ({
             loading="lazy"
             onError={(e) => {
               const img = e.currentTarget;
-              if (fallbackThumbnail && img.src !== fallbackThumbnail) img.src = fallbackThumbnail;
+              if (!img.src.endsWith(safeFallback)) img.src = safeFallback;
             }}
             className={`w-full h-full object-cover transition-transform duration-500 ${
               isUpcoming ? 'opacity-40 grayscale' : 'group-hover:scale-105'

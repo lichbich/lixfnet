@@ -11,7 +11,7 @@ import {
   EpisodeServer,
   EpisodeServerItem,
 } from '@/types';
-import { cleanMovieDescription } from '@/lib/movieUtils';
+import { cleanMovieDescription, DEFAULT_BACKDROP_IMAGE, DEFAULT_POSTER_IMAGE } from '@/lib/movieUtils';
 
 export const API_BASE_URL = 'https://phimapi.com';
 export const CDN_IMAGE_BASE = 'https://phimimg.com';
@@ -362,10 +362,10 @@ export function mapKKPhimToMovie(
   // Parse Images (thumb_url = 16:9 backdrop, poster_url = 2:3 vertical poster)
   const backdropUrl =
     formatPhimImageUrl(item.thumb_url || item.poster_url) ||
-    'https://images.unsplash.com/photo-1518709268805-4e9042af9f23?q=80&w=1200&auto=format&fit=crop';
+    DEFAULT_BACKDROP_IMAGE;
   const posterUrl =
     formatPhimImageUrl(item.poster_url || item.thumb_url) ||
-    'https://images.unsplash.com/photo-1534447677768-be436bb09401?q=80&w=600&auto=format&fit=crop';
+    DEFAULT_POSTER_IMAGE;
 
   // Parse episodes into Seasons & Episodes servers structure if available
   let seasonsList: Season[] | undefined;
