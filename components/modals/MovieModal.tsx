@@ -19,7 +19,7 @@ import { useNetflix } from '@/context/NetflixContext';
 import { getSimilarMovies, formatEpisodeTitle } from '@/services/movieApi';
 import { getMovieCollection, MovieCollection } from '@/services/collectionService';
 import { clientLogoCache } from '@/services/logoService';
-import { getCanonicalMovieId, isSameMovie, cleanMovieDescription, findNextEpisodeTarget } from '@/lib/movieUtils';
+import { getCanonicalMovieId, isSameMovie, cleanMovieDescription, findNextEpisodeTarget, DEFAULT_BACKDROP_IMAGE } from '@/lib/movieUtils';
 import {
   TmdbEpisodeMeta,
   fetchTmdbEpisodes,
@@ -772,8 +772,14 @@ export const MovieModal: React.FC = () => {
             }}
           />
           <img
-            src={movie.backdropUrl || movie.posterUrl}
+            src={movie.backdropUrl || movie.posterUrl || DEFAULT_BACKDROP_IMAGE}
             alt={movie.title}
+            onError={(e) => {
+              const img = e.currentTarget;
+              if (!img.src.endsWith(DEFAULT_BACKDROP_IMAGE)) {
+                img.src = DEFAULT_BACKDROP_IMAGE;
+              }
+            }}
             className={`relative w-full h-full object-cover object-top transition-opacity duration-1000 ${
               isTrailerPlaying && trailerKey && isTrailerReady ? 'opacity-0' : 'opacity-100'
             }`}
@@ -1487,8 +1493,14 @@ export const MovieModal: React.FC = () => {
                       {/* 16:9 Thumbnail Header */}
                       <div className="relative aspect-video w-full overflow-hidden bg-zinc-800">
                         <img
-                          src={colMovie.backdropUrl || colMovie.posterUrl}
+                          src={colMovie.backdropUrl || colMovie.posterUrl || DEFAULT_BACKDROP_IMAGE}
                           alt={colMovie.title}
+                          onError={(e) => {
+                            const img = e.currentTarget;
+                            if (!img.src.endsWith(DEFAULT_BACKDROP_IMAGE)) {
+                              img.src = DEFAULT_BACKDROP_IMAGE;
+                            }
+                          }}
                           className="w-full h-full object-cover object-top group-hover:scale-105 transition duration-300"
                         />
                         <div className="absolute inset-0 bg-gradient-to-t from-[#202020] via-transparent to-black/30 pointer-events-none" />
@@ -1616,8 +1628,14 @@ export const MovieModal: React.FC = () => {
                           style={{ backgroundImage: `url('${simMovie.backdropUrl || simMovie.posterUrl}')` }}
                         />
                         <img
-                          src={simMovie.backdropUrl || simMovie.posterUrl}
+                          src={simMovie.backdropUrl || simMovie.posterUrl || DEFAULT_BACKDROP_IMAGE}
                           alt={simMovie.title}
+                          onError={(e) => {
+                            const img = e.currentTarget;
+                            if (!img.src.endsWith(DEFAULT_BACKDROP_IMAGE)) {
+                              img.src = DEFAULT_BACKDROP_IMAGE;
+                            }
+                          }}
                           className="relative w-full h-full object-cover object-top group-hover:scale-105 transition duration-300"
                         />
                         <div className="absolute top-2 right-2 bg-black/70 px-1.5 py-0.5 rounded text-[11px] font-bold text-zinc-300">

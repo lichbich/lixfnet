@@ -6,6 +6,7 @@ import { Movie } from '@/types';
 import { Top10Badge, StatusBadge } from '@/components/ui/Badge';
 import { useNetflix } from '@/context/NetflixContext';
 import { formatEpisodeTitle } from '@/services/movieApi';
+import { DEFAULT_BACKDROP_IMAGE } from '@/lib/movieUtils';
 
 interface ContinueWatchingCardProps {
   movie: Movie;
@@ -46,9 +47,15 @@ export const ContinueWatchingCard: React.FC<ContinueWatchingCardProps> = ({
     >
       {/* Thumbnail */}
       <img
-        src={movie.backdropUrl || movie.posterUrl}
+        src={movie.backdropUrl || movie.posterUrl || DEFAULT_BACKDROP_IMAGE}
         alt={movie.title}
         loading="lazy"
+        onError={(e) => {
+          const img = e.currentTarget;
+          if (!img.src.endsWith(DEFAULT_BACKDROP_IMAGE)) {
+            img.src = DEFAULT_BACKDROP_IMAGE;
+          }
+        }}
         className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500"
       />
 

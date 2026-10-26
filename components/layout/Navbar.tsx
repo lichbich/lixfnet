@@ -242,6 +242,12 @@ export const Navbar: React.FC = () => {
                       <img
                         src="https://images.unsplash.com/photo-1517486808906-6ca8b3f04846?q=80&w=200&auto=format&fit=crop"
                         alt="Nobody Wants This"
+                        onError={(e) => {
+                          const img = e.currentTarget;
+                          if (!img.src.endsWith('/images/poster-placeholder.svg')) {
+                            img.src = '/images/poster-placeholder.svg';
+                          }
+                        }}
                         className="w-full h-full object-cover"
                       />
                     </div>
@@ -260,6 +266,12 @@ export const Navbar: React.FC = () => {
                       <img
                         src="https://images.unsplash.com/photo-1584515979956-d9f6e5d09982?q=80&w=200&auto=format&fit=crop"
                         alt="Bác Sĩ X"
+                        onError={(e) => {
+                          const img = e.currentTarget;
+                          if (!img.src.endsWith('/images/poster-placeholder.svg')) {
+                            img.src = '/images/poster-placeholder.svg';
+                          }
+                        }}
                         className="w-full h-full object-cover"
                       />
                     </div>

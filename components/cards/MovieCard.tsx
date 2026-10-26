@@ -5,6 +5,7 @@ import { Play, Plus, Check, ThumbsUp, ChevronDown } from 'lucide-react';
 import { Movie } from '@/types';
 import { Top10Badge, RatingBadge } from '@/components/ui/Badge';
 import { useNetflix } from '@/context/NetflixContext';
+import { DEFAULT_BACKDROP_IMAGE, DEFAULT_POSTER_IMAGE } from '@/lib/movieUtils';
 
 interface MovieCardProps {
   movie: Movie;
@@ -44,9 +45,10 @@ export const MovieCard = React.memo<MovieCardProps>(({
   };
 
   const isPortrait = variant === 'portrait';
-  const mainImage = isPortrait
+  const fallbackImage = isPortrait ? DEFAULT_POSTER_IMAGE : DEFAULT_BACKDROP_IMAGE;
+  const mainImage = (isPortrait
     ? movie.posterUrl || movie.backdropUrl
-    : movie.backdropUrl || movie.posterUrl;
+    : movie.backdropUrl || movie.posterUrl) || fallbackImage;
 
   const sizeClasses = fillWidth
     ? isPortrait
@@ -75,6 +77,12 @@ export const MovieCard = React.memo<MovieCardProps>(({
         src={mainImage}
         alt={movie.title}
         loading="lazy"
+        onError={(e) => {
+          const img = e.currentTarget;
+          if (!img.src.endsWith(fallbackImage)) {
+            img.src = fallbackImage;
+          }
+        }}
         className="relative w-full h-full object-cover object-top group-hover:scale-105 transition-transform duration-500 ease-out will-change-transform"
       />
 

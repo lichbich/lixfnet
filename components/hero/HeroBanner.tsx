@@ -7,6 +7,7 @@ import { useNetflix } from '@/context/NetflixContext';
 import { Movie } from '@/types';
 import { formatEpisodeTitle } from '@/services/movieApi';
 import { useHdTrailerFrame } from '@/lib/useHdTrailerFrame';
+import { DEFAULT_BACKDROP_IMAGE } from '@/lib/movieUtils';
 
 interface HeroBannerProps {
   movie?: Movie | null;
@@ -666,7 +667,7 @@ export const HeroBanner: React.FC<HeroBannerProps> = ({ movie, badgeText }) => {
             <div
               className="absolute inset-0 bg-cover bg-center filter blur-3xl scale-125 opacity-70 pointer-events-none transition-all duration-1000"
               style={{
-                backgroundImage: `url('${movie.backdropUrl || movie.posterUrl}')`,
+                backgroundImage: `url('${movie.backdropUrl || movie.posterUrl || DEFAULT_BACKDROP_IMAGE}')`,
               }}
             />
 
@@ -676,7 +677,7 @@ export const HeroBanner: React.FC<HeroBannerProps> = ({ movie, badgeText }) => {
                 isTrailerPlaying && trailerKey && isTrailerReady ? 'opacity-0' : 'opacity-100 group-hover:scale-102'
               }`}
               style={{
-                backgroundImage: `url('${movie.backdropUrl || movie.posterUrl}')`,
+                backgroundImage: `url('${movie.backdropUrl || movie.posterUrl || DEFAULT_BACKDROP_IMAGE}')`,
               }}
             />
 
