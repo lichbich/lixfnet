@@ -17,6 +17,13 @@ export const Top10Card: React.FC<Top10CardProps> = ({ movie, rank }) => {
   const cardRef = useRef<HTMLDivElement>(null);
 
   const handleMouseEnter = () => {
+    if (typeof window !== 'undefined') {
+      const isTouch =
+        window.matchMedia('(hover: none) and (pointer: coarse)').matches ||
+        window.innerWidth < 1024 ||
+        navigator.maxTouchPoints > 0;
+      if (isTouch) return;
+    }
     if (cardRef.current) {
       const rect = cardRef.current.getBoundingClientRect();
       onCardHover(movie, rect);

@@ -382,6 +382,32 @@ export const NetflixProvider: React.FC<{ children: React.ReactNode }> = ({ child
   const [hoverRect, setHoverRect] = useState<HoverRect | null>(null);
   const [isCardTrailerPlaying, setIsCardTrailerPlaying] = useState<boolean>(false);
 
+  // Hover Popout Coordination State & Timers
+  const hoveredMovieRef = useRef<Movie | null>(null);
+  hoveredMovieRef.current = hoveredMovie;
+
+  const hoverOpenTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const hoverCloseTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const lastScrollTimeRef = useRef<number>(0);
+
+  const clearHoverTimers = useCallback(() => {
+    if (hoverOpenTimerRef.current) {
+      clearTimeout(hoverOpenTimerRef.current);
+      hoverOpenTimerRef.current = null;
+    }
+    if (hoverCloseTimerRef.current) {
+      clearTimeout(hoverCloseTimerRef.current);
+      hoverCloseTimerRef.current = null;
+    }
+  }, []);
+
+  const closeHoverPopoutNow = useCallback(() => {
+    clearHoverTimers();
+    setHoveredMovie(null);
+    setHoverRect(null);
+    setIsCardTrailerPlaying(false);
+  }, [clearHoverTimers]);
+
   // Initialize & sync user-scoped My List from Firebase cloud (DATABASE IS AUTHORITY)
   useEffect(() => {
     if (!currentUser?.username) {
@@ -446,6 +472,7 @@ export const NetflixProvider: React.FC<{ children: React.ReactNode }> = ({ child
 
   const openModal = useCallback(async (movie: Movie) => {
     if (!movie) return;
+    closeHoverPopoutNow();
 
     // Immediately resolve logo from client cache if currently missing on object
     const canonicalId = getCanonicalMovieId(movie);
@@ -561,8 +588,9 @@ export const NetflixProvider: React.FC<{ children: React.ReactNode }> = ({ child
   }, []);
 
   const closeModal = useCallback(() => {
+    closeHoverPopoutNow();
     setSelectedMovie(null);
-  }, []);
+  }, [closeHoverPopoutNow]);
 
   const startPlaying = useCallback(
     async (
@@ -1265,33 +1293,18 @@ export const NetflixProvider: React.FC<{ children: React.ReactNode }> = ({ child
     return deduplicateMovies(movies);
   }, [watchProgressMap]);
 
-  // Hover Popout Coordination State & Timers
-  const hoveredMovieRef = useRef<Movie | null>(null);
-  hoveredMovieRef.current = hoveredMovie;
-
-  const hoverOpenTimerRef = useRef<NodeJS.Timeout | null>(null);
-  const hoverCloseTimerRef = useRef<NodeJS.Timeout | null>(null);
-  const lastScrollTimeRef = useRef<number>(0);
-
-  const clearHoverTimers = useCallback(() => {
-    if (hoverOpenTimerRef.current) {
-      clearTimeout(hoverOpenTimerRef.current);
-      hoverOpenTimerRef.current = null;
-    }
-    if (hoverCloseTimerRef.current) {
-      clearTimeout(hoverCloseTimerRef.current);
-      hoverCloseTimerRef.current = null;
-    }
-  }, []);
-
-  const closeHoverPopoutNow = useCallback(() => {
-    clearHoverTimers();
-    setHoveredMovie(null);
-    setHoverRect(null);
-    setIsCardTrailerPlaying(false);
-  }, [clearHoverTimers]);
-
   const onCardHover = useCallback((movie: Movie, rect: DOMRect) => {
+    // 0. Disable hover popouts completely on mobile/touch screens
+    if (typeof window !== 'undefined') {
+      const isTouch =
+        window.matchMedia('(hover: none) and (pointer: coarse)').matches ||
+        window.innerWidth < 1024 ||
+        navigator.maxTouchPoints > 0;
+      if (isTouch) {
+        return;
+      }
+    }
+
     // 1. If user was actively scrolling or wheeling in the last 250ms, ignore hover triggers
     if (Date.now() - lastScrollTimeRef.current < 250) {
       return;

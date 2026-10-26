@@ -251,16 +251,24 @@ export const HeroBanner: React.FC<HeroBannerProps> = ({ movie, badgeText }) => {
       // ignore
     }
 
+    const isMobile =
+      typeof window !== 'undefined' &&
+      (window.innerWidth < 1024 ||
+        window.matchMedia('(hover: none) and (pointer: coarse)').matches ||
+        navigator.maxTouchPoints > 0);
+
     const immediateKey =
       movie.trailerYoutubeKey || (cachedKey && cachedKey !== 'none' ? cachedKey : null);
 
     if (immediateKey) {
       setTrailerKey(immediateKey);
-      trailerTimerRef.current = setTimeout(() => {
-        if (!isCancelled) {
-          setIsTrailerPlaying(true);
-        }
-      }, 1000);
+      if (!isMobile) {
+        trailerTimerRef.current = setTimeout(() => {
+          if (!isCancelled) {
+            setIsTrailerPlaying(true);
+          }
+        }, 1000);
+      }
     } else {
       const qTitle = encodeURIComponent(movie.title || '');
       const qSub = encodeURIComponent(movie.subTitle || '');
@@ -292,12 +300,14 @@ export const HeroBanner: React.FC<HeroBannerProps> = ({ movie, badgeText }) => {
             } catch {
               // ignore
             }
-            // Only start trailer playback if key is verified
-            trailerTimerRef.current = setTimeout(() => {
-              if (!isCancelled) {
-                setIsTrailerPlaying(true);
-              }
-            }, 1000);
+            // Only start trailer playback on desktop
+            if (!isMobile) {
+              trailerTimerRef.current = setTimeout(() => {
+                if (!isCancelled) {
+                  setIsTrailerPlaying(true);
+                }
+              }, 1000);
+            }
           } else {
             // Movie has no trailer: keep clean backdrop poster
             setTrailerKey(null);

@@ -115,6 +115,8 @@ export const HoverPopoutCard: React.FC = () => {
   useEffect(() => {
     if (isModalOpen) {
       setIsOpen(false);
+      setActiveMovie(null);
+      setActiveRect(null);
       setIsTrailerPlaying(false);
       setIsTrailerReady(false);
       if (trailerTimerRef.current) {
@@ -417,7 +419,14 @@ export const HoverPopoutCard: React.FC = () => {
     };
   }, []);
 
-  if (!activeMovie || !activeRect) return null;
+  // Check if touch / mobile device or if modal is open
+  const isTouchDevice =
+    typeof window !== 'undefined' &&
+    (window.matchMedia('(hover: none) and (pointer: coarse)').matches ||
+      window.innerWidth < 1024 ||
+      navigator.maxTouchPoints > 0);
+
+  if (isTouchDevice || isModalOpen || !activeMovie || !activeRect) return null;
 
   const inList = isInMyList(activeMovie.id, activeMovie);
   const watchProgress = getWatchProgress(activeMovie.slug || activeMovie.id, activeMovie);
