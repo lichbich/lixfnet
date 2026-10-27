@@ -205,6 +205,8 @@ export const HoverPopoutCard: React.FC = () => {
       if (activeMovie.tmdbId) clientLogoCache.set(`tmdb_${activeMovie.tmdbId}`, url);
       if (activeMovie.tmdb?.id) clientLogoCache.set(`tmdb_${activeMovie.tmdb.id}`, url);
       try {
+        localStorage.setItem(`netlix_logo_v3_${movieKey}`, url);
+        localStorage.setItem(`netlix_logo_v3_${canonicalId}`, url);
         sessionStorage.setItem(`netlix_logo_v3_${movieKey}`, url);
         sessionStorage.setItem(`netlix_logo_v3_${canonicalId}`, url);
       } catch {}
@@ -213,15 +215,17 @@ export const HoverPopoutCard: React.FC = () => {
     if (existingCached) {
       saveResolvedLogo(existingCached);
     } else {
-      let sessionLogo: string | null = null;
+      let savedLogo: string | null = null;
       try {
-        sessionLogo =
+        savedLogo =
+          localStorage.getItem(`netlix_logo_v3_${movieKey}`) ||
+          localStorage.getItem(`netlix_logo_v3_${canonicalId}`) ||
           sessionStorage.getItem(`netlix_logo_v3_${movieKey}`) ||
           sessionStorage.getItem(`netlix_logo_v3_${canonicalId}`);
       } catch {}
 
-      if (sessionLogo && sessionLogo !== 'none') {
-        saveResolvedLogo(sessionLogo);
+      if (savedLogo && savedLogo !== 'none') {
+        saveResolvedLogo(savedLogo);
       } else {
         // Eagerly resolve logo from TMDB
         const qTitle = encodeURIComponent(activeMovie.title || '');
@@ -245,10 +249,12 @@ export const HoverPopoutCard: React.FC = () => {
       }
     }
 
-    // 2. Check client storage cache for trailer
+    // 2. Check client storage cache for trailer (Persistent localStorage first)
     let cachedKey: string | null = null;
     try {
-      cachedKey = sessionStorage.getItem(`netlix_trailer_${movieSlug}`);
+      cachedKey =
+        localStorage.getItem(`netlix_trailer_${movieSlug}`) ||
+        sessionStorage.getItem(`netlix_trailer_${movieSlug}`);
     } catch {
       // ignore
     }
@@ -284,6 +290,7 @@ export const HoverPopoutCard: React.FC = () => {
               setBackupKeys(data.backupKeys);
             }
             try {
+              localStorage.setItem(`netlix_trailer_${movieSlug}`, data.youtubeKey);
               sessionStorage.setItem(`netlix_trailer_${movieSlug}`, data.youtubeKey);
             } catch {
               // ignore
@@ -292,6 +299,9 @@ export const HoverPopoutCard: React.FC = () => {
             maybePlayTrailer();
           } else {
             // Film has no trailer -> cleanly retain cover image without playing anything
+            try {
+              localStorage.setItem(`netlix_trailer_${movieSlug}`, 'none');
+            } catch {}
             setTrailerKey(null);
             setIsTrailerPlaying(false);
             setIsTrailerReady(false);

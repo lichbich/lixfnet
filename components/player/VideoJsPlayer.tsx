@@ -21,6 +21,7 @@ export interface VideoJsPlayerProps {
   onSelectEpisode?: (embed?: string, title?: string, m3u8?: string) => void;
   onClose: () => void;
   onTimeUpdate?: (currentTime: number, duration: number) => void;
+  onPause?: () => void;
   onEnded?: () => void;
   onError?: (e: any) => void;
   className?: string;
@@ -291,6 +292,7 @@ export const VideoJsPlayer: React.FC<VideoJsPlayerProps> = ({
   onSelectEpisode,
   onClose,
   onTimeUpdate,
+  onPause,
   onEnded,
   onError,
   className = '',
@@ -379,6 +381,12 @@ export const VideoJsPlayer: React.FC<VideoJsPlayerProps> = ({
     }
   };
 
+  const handlePause = () => {
+    if (onPause) {
+      onPause();
+    }
+  };
+
   return (
     <div className={`relative w-full h-full flex items-center justify-center bg-black overflow-hidden [&_.media-title]:hidden! ${className}`}>
       <VideoPlayer poster={poster}>
@@ -394,6 +402,7 @@ export const VideoJsPlayer: React.FC<VideoJsPlayerProps> = ({
               crossOrigin="anonymous"
               onLoadedMetadata={handleLoadedMetadata}
               onTimeUpdate={handleTimeUpdate}
+              onPause={handlePause}
               onEnded={onEnded}
               onError={onError}
               style={{ width: '100%', height: '100%', objectFit: 'contain' }}
@@ -407,6 +416,7 @@ export const VideoJsPlayer: React.FC<VideoJsPlayerProps> = ({
               crossOrigin="anonymous"
               onLoadedMetadata={handleLoadedMetadata}
               onTimeUpdate={handleTimeUpdate}
+              onPause={handlePause}
               onEnded={onEnded}
               onError={onError}
               style={{ width: '100%', height: '100%', objectFit: 'contain' }}
