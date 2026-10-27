@@ -65,7 +65,8 @@ interface NetflixContextType {
     duration: number,
     episodeTitle?: string,
     episodeEmbed?: string,
-    episodeM3u8?: string
+    episodeM3u8?: string,
+    syncToCloud?: boolean
   ) => void;
   getWatchProgress: (slugOrId: string, movieObj?: Movie) => WatchProgress | undefined;
   getEpisodeProgress: (slugOrId: string, episodeNameOrNumber: string, movieObj?: Movie) => EpisodeProgress | undefined;
@@ -501,6 +502,17 @@ export const NetflixProvider: React.FC<{ children: React.ReactNode }> = ({ child
       // Verifies title, release year, director matching, and cast members overlap.
       // Retrieves transparent HD logo, 4K backdrops/posters, official synopsis, cast & crew.
       const enrichPromise = (async () => {
+        const enrichCacheKey = `netlix_enrich_${targetSlug || initialMovie.slug || initialMovie.id}`;
+        try {
+          const cachedEnrich = localStorage.getItem(enrichCacheKey);
+          if (cachedEnrich) {
+            const parsed = JSON.parse(cachedEnrich);
+            if (parsed && typeof parsed === 'object') {
+              return parsed as Movie;
+            }
+          }
+        } catch {}
+
         try {
           const res = await fetch('/api/movie/enrich', {
             method: 'POST',
@@ -509,10 +521,19 @@ export const NetflixProvider: React.FC<{ children: React.ReactNode }> = ({ child
           });
           if (res.ok) {
             const data = await res.json();
-            if (data.movie) return data.movie as Movie;
+            if (data.movie) {
+              try {
+                localStorage.setItem(enrichCacheKey, JSON.stringify(data.movie));
+              } catch {}
+              return data.movie as Movie;
+            }
           }
         } catch {}
-        return crossMatchAndEnrichMovie(initialMovie);
+        const enrichedLocal = await crossMatchAndEnrichMovie(initialMovie);
+        try {
+          localStorage.setItem(enrichCacheKey, JSON.stringify(enrichedLocal));
+        } catch {}
+        return enrichedLocal;
       })().catch((err) => {
         console.warn('Cross-match enrichment error:', err);
         return initialMovie;
@@ -1049,6 +1070,8 @@ export const NetflixProvider: React.FC<{ children: React.ReactNode }> = ({ child
   }, [currentUser?.username]);
 
   // Update Watch Progress (User-scoped & cloud synced with fixed canonical ID)
+  // syncToCloud: false during active playback (saves to localStorage only, 0 Vercel compute)
+  // syncToCloud: true on Pause, Exit, Episode Switch, Ended, or safety heartbeat (5m)
   const updateWatchProgress = useCallback(
     (
       movie: Movie,
@@ -1056,7 +1079,8 @@ export const NetflixProvider: React.FC<{ children: React.ReactNode }> = ({ child
       duration: number,
       episodeTitle?: string,
       episodeEmbed?: string,
-      episodeM3u8?: string
+      episodeM3u8?: string,
+      syncToCloud: boolean = false
     ) => {
       if (!movie) return;
       const canonicalKey = getCanonicalMovieId(movie);
@@ -1167,11 +1191,12 @@ export const NetflixProvider: React.FC<{ children: React.ReactNode }> = ({ child
         const next: Record<string, WatchProgress> = { ...prev };
         if (existingKey && existingKey !== canonicalKey) {
           delete next[existingKey];
-          if (activeUser?.username) {
+          if (activeUser?.username && syncToCloud) {
             fetch('/api/user/progress', {
               method: 'DELETE',
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify({ key: existingKey }),
+              keepalive: true,
             }).catch(() => {});
           }
         }
@@ -1187,13 +1212,16 @@ export const NetflixProvider: React.FC<{ children: React.ReactNode }> = ({ child
           // ignore
         }
 
-        // Sync to cloud Firebase in background (Database is source of truth)
-        if (activeUser?.username) {
-          fetch('/api/user/progress', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ key: canonicalKey, progress: progressItem }),
-          }).catch(() => {});
+        // Sync to cloud Firebase in background ONLY when syncToCloud is true (pause, exit, switch ep, or safety heartbeat)
+        if (activeUser?.username && syncToCloud) {
+          try {
+            fetch('/api/user/progress', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ key: canonicalKey, progress: progressItem }),
+              keepalive: true,
+            }).catch(() => {});
+          } catch {}
         }
 
         return next;

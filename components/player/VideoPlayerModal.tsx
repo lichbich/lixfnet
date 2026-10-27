@@ -117,20 +117,47 @@ export const VideoPlayerModal: React.FC = () => {
     return null;
   }, [currentServer, activeEmbed, resolvedM3u8, currentEpisodeTitle, playingMovie?.currentEpisode]);
 
+  // Watch progress tracker refs
+  const lastSavedTimeRef = useRef(0);
+  const lastCloudSyncTimeRef = useRef(Date.now());
+  const currentProgressRef = useRef({ time: 0, duration: 0 });
+
+  // Dedicated saver: updates local state, only syncs to Vercel/Firebase when syncToCloud is true
+  const saveProgressNow = useCallback(
+    (syncToCloud: boolean = true) => {
+      if (!playingMovie || currentProgressRef.current.time <= 0) return;
+      if (syncToCloud) {
+        lastCloudSyncTimeRef.current = Date.now();
+      }
+      updateWatchProgress(
+        playingMovie,
+        Math.round(currentProgressRef.current.time),
+        Math.round(currentProgressRef.current.duration || 45 * 60),
+        currentEpisodeTitle || playingMovie.currentEpisode,
+        activeEmbed || playingMovie.embedUrl,
+        resolvedM3u8 || playingMovie.m3u8Url,
+        syncToCloud
+      );
+    },
+    [playingMovie, currentEpisodeTitle, activeEmbed, resolvedM3u8, updateWatchProgress]
+  );
+
   const handlePlayNextEpisode = useCallback(() => {
     if (!nextEpisode) return;
+    saveProgressNow(true);
     setPlayingEpisode(
       nextEpisode.embed,
       formatEpisodeTitle(nextEpisode.name),
       nextEpisode.m3u8
     );
-  }, [nextEpisode, setPlayingEpisode]);
+  }, [nextEpisode, saveProgressNow, setPlayingEpisode]);
 
   const handleSelectEpisode = useCallback(
     (embed?: string, epTitle?: string, m3u8?: string) => {
+      saveProgressNow(true);
       setPlayingEpisode(embed || '', epTitle || 'Tập 1', m3u8);
     },
-    [setPlayingEpisode]
+    [saveProgressNow, setPlayingEpisode]
   );
 
   // Initial resume playback time
@@ -150,29 +177,30 @@ export const VideoPlayerModal: React.FC = () => {
     );
   }, [playingMovie, currentEpisodeTitle, getEpisodeProgress, getWatchProgress]);
 
-  // Watch progress tracker refs
-  const lastSavedTimeRef = useRef(0);
-  const currentProgressRef = useRef({ time: 0, duration: 0 });
-
+  // While playing: updates local state & localStorage (0 server requests). Heartbeat syncs to cloud only every 5 minutes.
   const handleTimeUpdate = useCallback(
     (time: number, dur: number) => {
       currentProgressRef.current = { time, duration: dur };
       if (Math.abs(time - lastSavedTimeRef.current) >= 5 && playingMovie) {
         lastSavedTimeRef.current = time;
-        updateWatchProgress(
-          playingMovie,
-          Math.round(time),
-          Math.round(dur),
-          currentEpisodeTitle || playingMovie.currentEpisode,
-          activeEmbed || playingMovie.embedUrl,
-          resolvedM3u8 || playingMovie.m3u8Url
-        );
+        // 1. Update local state & localStorage (0 network requests, 0 Vercel compute)
+        saveProgressNow(false);
+
+        // 2. Safety Heartbeat: If user watches continuously without pause for 5 minutes, sync to cloud once
+        if (Date.now() - lastCloudSyncTimeRef.current >= 5 * 60 * 1000) {
+          saveProgressNow(true);
+        }
       }
     },
-    [playingMovie, currentEpisodeTitle, activeEmbed, resolvedM3u8, updateWatchProgress]
+    [playingMovie, saveProgressNow]
   );
 
-  // Smooth cinematic fade to black before closing
+  // Sync to cloud immediately when user pauses video
+  const handlePause = useCallback(() => {
+    saveProgressNow(true);
+  }, [saveProgressNow]);
+
+  // Smooth cinematic fade to black before closing, syncing progress to cloud
   const handleClose = useCallback(() => {
     if (isExiting) return;
     setIsExiting(true);
@@ -187,16 +215,8 @@ export const VideoPlayerModal: React.FC = () => {
     }
     unlockScreenOrientation();
 
-    if (playingMovie && currentProgressRef.current.time > 0) {
-      updateWatchProgress(
-        playingMovie,
-        Math.round(currentProgressRef.current.time),
-        Math.round(currentProgressRef.current.duration || 45 * 60),
-        currentEpisodeTitle || playingMovie.currentEpisode,
-        activeEmbed || playingMovie.embedUrl,
-        resolvedM3u8 || playingMovie.m3u8Url
-      );
-    }
+    // Persist to cloud on exit
+    saveProgressNow(true);
 
     setTimeout(() => {
       stopPlaying();
@@ -207,7 +227,31 @@ export const VideoPlayerModal: React.FC = () => {
         }
       } catch {}
     }, 350);
-  }, [isExiting, playingMovie, currentEpisodeTitle, activeEmbed, resolvedM3u8, stopPlaying, updateWatchProgress]);
+  }, [isExiting, saveProgressNow, stopPlaying]);
+
+  // Flush progress when tab is closed, switched away, or backgrounded
+  useEffect(() => {
+    if (!playingMovie) return;
+    const handleUnloadOrHide = () => {
+      saveProgressNow(true);
+    };
+
+    const handleVisibility = () => {
+      if (document.visibilityState === 'hidden') {
+        saveProgressNow(true);
+      }
+    };
+
+    window.addEventListener('pagehide', handleUnloadOrHide);
+    window.addEventListener('beforeunload', handleUnloadOrHide);
+    document.addEventListener('visibilitychange', handleVisibility);
+
+    return () => {
+      window.removeEventListener('pagehide', handleUnloadOrHide);
+      window.removeEventListener('beforeunload', handleUnloadOrHide);
+      document.removeEventListener('visibilitychange', handleVisibility);
+    };
+  }, [playingMovie?.id, saveProgressNow]);
 
   // Ensure orientation lock is released when unmounting
   useEffect(() => {
@@ -309,7 +353,9 @@ export const VideoPlayerModal: React.FC = () => {
             onClose={handleClose}
             initialTime={initialTime}
             onTimeUpdate={handleTimeUpdate}
+            onPause={handlePause}
             onEnded={() => {
+              saveProgressNow(true);
               if (nextEpisode) {
                 handlePlayNextEpisode();
               }

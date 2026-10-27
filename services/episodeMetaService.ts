@@ -91,7 +91,9 @@ export function fetchTmdbEpisodes(tvId: string, season: number): Promise<TmdbEpi
 
   if (typeof window !== 'undefined') {
     try {
-      const stored = sessionStorage.getItem(CACHE_PREFIX + key);
+      const stored =
+        localStorage.getItem(CACHE_PREFIX + key) ||
+        sessionStorage.getItem(CACHE_PREFIX + key);
       if (stored) {
         const parsed = JSON.parse(stored) as TmdbEpisodeMeta[];
         const p = Promise.resolve(parsed);
@@ -107,6 +109,7 @@ export function fetchTmdbEpisodes(tvId: string, season: number): Promise<TmdbEpi
       const list: TmdbEpisodeMeta[] = Array.isArray(data?.episodes) ? data.episodes : [];
       if (list.length > 0 && typeof window !== 'undefined') {
         try {
+          localStorage.setItem(CACHE_PREFIX + key, JSON.stringify(list));
           sessionStorage.setItem(CACHE_PREFIX + key, JSON.stringify(list));
         } catch {}
       }

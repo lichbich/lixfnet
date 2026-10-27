@@ -232,7 +232,9 @@ export const HeroBanner: React.FC<HeroBannerProps> = ({ movie, badgeText }) => {
     // Check client storage cache for logo first
     let cachedLogo: string | null = null;
     try {
-      cachedLogo = sessionStorage.getItem(`netlix_logo_v3_${movieSlug}`);
+      cachedLogo =
+        localStorage.getItem(`netlix_logo_v3_${movieSlug}`) ||
+        sessionStorage.getItem(`netlix_logo_v3_${movieSlug}`);
     } catch {}
 
     if (cachedLogo && cachedLogo !== 'none') {
@@ -246,7 +248,9 @@ export const HeroBanner: React.FC<HeroBannerProps> = ({ movie, badgeText }) => {
     // Check client-side storage cache first for trailer
     let cachedKey: string | null = null;
     try {
-      cachedKey = sessionStorage.getItem(`netlix_trailer_${movieSlug}`);
+      cachedKey =
+        localStorage.getItem(`netlix_trailer_${movieSlug}`) ||
+        sessionStorage.getItem(`netlix_trailer_${movieSlug}`);
     } catch {
       // ignore
     }
@@ -287,6 +291,7 @@ export const HeroBanner: React.FC<HeroBannerProps> = ({ movie, badgeText }) => {
           if (data.logoUrl) {
             setLogoUrl(data.logoUrl);
             try {
+              localStorage.setItem(`netlix_logo_v3_${movieSlug}`, data.logoUrl);
               sessionStorage.setItem(`netlix_logo_v3_${movieSlug}`, data.logoUrl);
             } catch {}
           }
@@ -296,6 +301,7 @@ export const HeroBanner: React.FC<HeroBannerProps> = ({ movie, badgeText }) => {
               setBackupKeys(data.backupKeys);
             }
             try {
+              localStorage.setItem(`netlix_trailer_${movieSlug}`, data.youtubeKey);
               sessionStorage.setItem(`netlix_trailer_${movieSlug}`, data.youtubeKey);
             } catch {
               // ignore
@@ -335,10 +341,12 @@ export const HeroBanner: React.FC<HeroBannerProps> = ({ movie, badgeText }) => {
           if (!isCancelled && data.logoUrl) {
             setLogoUrl(data.logoUrl);
             try {
+              localStorage.setItem(`netlix_logo_v3_${movieSlug}`, data.logoUrl);
               sessionStorage.setItem(`netlix_logo_v3_${movieSlug}`, data.logoUrl);
             } catch {}
           } else if (!isCancelled) {
             try {
+              localStorage.setItem(`netlix_logo_v3_${movieSlug}`, 'none');
               sessionStorage.setItem(`netlix_logo_v3_${movieSlug}`, 'none');
             } catch {}
           }
