@@ -261,6 +261,94 @@ export const NETFLIX_VN_TUDUM_DICTIONARY: Record<
     year: 2012,
     type: 'series',
   },
+  'Cyberpunk: Edgerunners 2': {
+    vietnameseTitle: 'Cyberpunk: Edgerunners (Phần 2)',
+    originalTitle: 'Cyberpunk: Edgerunners',
+    slug: 'cyberpunk-edgerunners-phan-2',
+    tmdbId: 105248,
+    year: 2026,
+    type: 'series',
+  },
+  'Cyberpunk: Edgerunners': {
+    vietnameseTitle: 'Cyberpunk: Edgerunners',
+    originalTitle: 'Cyberpunk: Edgerunners',
+    slug: 'cyberpunk-edgerunners-phan-2',
+    tmdbId: 105248,
+    year: 2022,
+    type: 'series',
+  },
+  'Dragon Ball Super: Beerus: Season 1': {
+    vietnameseTitle: 'Dragon Ball Super: Beerus',
+    originalTitle: 'Dragon Ball Super: Beerus',
+    slug: 'dragon-ball-super-beerus',
+    tmdbId: 312359,
+    year: 2026,
+    type: 'series',
+  },
+  'Dragon Ball Super: Beerus': {
+    vietnameseTitle: 'Dragon Ball Super: Beerus',
+    originalTitle: 'Dragon Ball Super: Beerus',
+    slug: 'dragon-ball-super-beerus',
+    tmdbId: 312359,
+    year: 2026,
+    type: 'series',
+  },
+  'The Apothecary Diaries: Season 3': {
+    vietnameseTitle: 'Dược Sư Tự Sự (Phần 3)',
+    originalTitle: 'The Apothecary Diaries',
+    slug: 'duoc-su-tu-su-phan-3',
+    tmdbId: 220542,
+    year: 2026,
+    type: 'series',
+  },
+  'Extraordinary Attorney Minami: Season 1': {
+    vietnameseTitle: 'Nữ Luật Sư Kỳ Lạ Minami',
+    originalTitle: 'Extraordinary Attorney Minami',
+    slug: 'nu-luat-su-ky-la-minami',
+    tmdbId: 332713,
+    year: 2026,
+    type: 'series',
+  },
+  'Extraordinary Attorney Minami': {
+    vietnameseTitle: 'Nữ Luật Sư Kỳ Lạ Minami',
+    originalTitle: 'Extraordinary Attorney Minami',
+    slug: 'nu-luat-su-ky-la-minami',
+    tmdbId: 332713,
+    year: 2026,
+    type: 'series',
+  },
+  'Black Adam': {
+    vietnameseTitle: 'Black Adam',
+    originalTitle: 'Black Adam',
+    slug: 'black-adam',
+    tmdbId: 436270,
+    year: 2022,
+    type: 'movie',
+  },
+  'Surviving Hurricane Otis': {
+    vietnameseTitle: 'Vượt Qua Bão Otis',
+    originalTitle: 'Surviving Hurricane Otis',
+    slug: 'vuot-qua-bao-otis',
+    tmdbId: 1780005,
+    year: 2026,
+    type: 'movie',
+  },
+  'The 4 Rascals': {
+    vietnameseTitle: 'Bộ Tứ Báo Thủ',
+    originalTitle: 'The 4 Rascals',
+    slug: 'bo-tu-bao-thu',
+    tmdbId: 1391703,
+    year: 2025,
+    type: 'movie',
+  },
+  'Blackout': {
+    vietnameseTitle: 'Cuộc Chiến Bí Ẩn',
+    originalTitle: 'Blackout',
+    slug: 'cuoc-chien-bi-an',
+    tmdbId: 1624183,
+    year: 2026,
+    type: 'movie',
+  },
 };
 
 /**
@@ -793,7 +881,7 @@ async function tmdbItemToMovie(
  * Enriched with NETFLIX_VN_TUDUM_DICTIONARY for perfect accuracy on titles, TMDB IDs, and NguonC slugs.
  */
 export async function getNetflixTop10VN(): Promise<{ series: Movie[]; films: Movie[] }> {
-  const cached = getFromCache<{ series: Movie[]; films: Movie[] }>('netflix_top10_vn_v4', 4 * 3600 * 1000);
+  const cached = getFromCache<{ series: Movie[]; films: Movie[] }>('netflix_top10_vn_v5', 7 * 24 * 3600 * 1000);
   if (cached && cached.series.length > 0 && cached.films.length > 0) return cached;
 
   try {
