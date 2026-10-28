@@ -15,6 +15,14 @@ import {
 } from '@/lib/movieUtils';
 import { crossMatchAndEnrichMovie } from '@/services/movieCrossMatchService';
 import { clientLogoCache } from '@/services/logoService';
+import {
+  directGetUserWatchProgress,
+  directSaveUserWatchProgress,
+  directRemoveUserWatchProgress,
+  directGetUserMyList,
+  directSaveUserMyListItem,
+  directRemoveUserMyListItem,
+} from '@/lib/firebaseDirectClient';
 
 interface HoverRect {
   top: number;
@@ -432,16 +440,12 @@ export const NetflixProvider: React.FC<{ children: React.ReactNode }> = ({ child
       setMyList([]);
     }
 
-    // 2. Fetch cloud-synced My List from Firebase (Database is source of truth)
-    fetch('/api/user/mylist')
-      .then((res) => {
-        if (!res.ok) throw new Error('Not logged in');
-        return res.json();
-      })
-      .then((data) => {
-        if (data.myList && Array.isArray(data.myList)) {
+    // 2. Fetch cloud-synced My List directly from Firebase (Bypasses Vercel)
+    directGetUserMyList(currentUser.username)
+      .then((items) => {
+        if (items && Array.isArray(items)) {
           // Deduplicate all cloud items using isSameMovie
-          const deduplicated = deduplicateMovies(data.myList);
+          const deduplicated = deduplicateMovies(items);
           setMyList(deduplicated);
 
           try {
@@ -449,19 +453,15 @@ export const NetflixProvider: React.FC<{ children: React.ReactNode }> = ({ child
           } catch {}
 
           // If duplicates existed in Firebase, clean them up from Firebase database
-          if (deduplicated.length < data.myList.length) {
-            for (const raw of data.myList) {
+          if (deduplicated.length < items.length) {
+            for (const raw of items) {
               const isKept = deduplicated.some(
                 (d) => d.id === raw.id || (d.slug && raw.slug && d.slug === raw.slug)
               );
               if (!isKept) {
                 const k = raw.id || raw.slug;
                 if (k) {
-                  fetch('/api/user/mylist', {
-                    method: 'DELETE',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ key: k }),
-                  }).catch(() => {});
+                  directRemoveUserMyListItem(currentUser.username, k);
                 }
               }
             }
@@ -840,11 +840,7 @@ export const NetflixProvider: React.FC<{ children: React.ReactNode }> = ({ child
             if (cKey) keysToDelete.add(cKey);
           });
           keysToDelete.forEach((k) => {
-            fetch('/api/user/mylist', {
-              method: 'DELETE',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ key: k }),
-            }).catch(() => {});
+            directRemoveUserMyListItem(activeUser.username, k);
           });
         }
       } else {
@@ -854,11 +850,7 @@ export const NetflixProvider: React.FC<{ children: React.ReactNode }> = ({ child
         };
         nextList = deduplicateMovies([canonicalMovie, ...prev]);
         if (activeUser?.username) {
-          fetch('/api/user/mylist', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ key: movieKey, movie: canonicalMovie }),
-          }).catch(() => {});
+          directSaveUserMyListItem(activeUser.username, movieKey, canonicalMovie);
         }
       }
       try {
@@ -906,16 +898,12 @@ export const NetflixProvider: React.FC<{ children: React.ReactNode }> = ({ child
       setWatchProgressMap({});
     }
 
-    // 2. Fetch cloud-synced progress from Firebase (Database is source of truth)
-    fetch('/api/user/progress')
-      .then((res) => {
-        if (!res.ok) throw new Error('Not logged in');
-        return res.json();
-      })
-      .then((data) => {
-        if (data.progress && typeof data.progress === 'object') {
+    // 2. Fetch cloud-synced progress directly from Firebase (Bypasses Vercel)
+    directGetUserWatchProgress(username)
+      .then((progress) => {
+        if (progress && typeof progress === 'object') {
           // Cloud records are the authority!
-          const cloudMap: Record<string, WatchProgress> = data.progress;
+          const cloudMap: Record<string, WatchProgress> = progress;
           const dedupedCloud = deduplicateWatchProgressMap(cloudMap);
 
           setWatchProgressMap((prev) => {
@@ -937,11 +925,7 @@ export const NetflixProvider: React.FC<{ children: React.ReactNode }> = ({ child
                 const cloudWp = merged[matchedCloudKey];
                 if ((localWp.updatedAt || 0) > (cloudWp.updatedAt || 0) + 15000) {
                   merged[matchedCloudKey] = localWp;
-                  fetch('/api/user/progress', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ key: matchedCloudKey, progress: localWp }),
-                  }).catch(() => {});
+                  directSaveUserWatchProgress(username, matchedCloudKey, localWp);
                 }
               }
             }
@@ -956,11 +940,7 @@ export const NetflixProvider: React.FC<{ children: React.ReactNode }> = ({ child
             const finalKeys = new Set(Object.keys(finalMap));
             for (const ck of cloudKeys) {
               if (!finalKeys.has(ck)) {
-                fetch('/api/user/progress', {
-                  method: 'DELETE',
-                  headers: { 'Content-Type': 'application/json' },
-                  body: JSON.stringify({ key: ck }),
-                }).catch(() => {});
+                directRemoveUserWatchProgress(username, ck);
               }
             }
 
@@ -1192,12 +1172,7 @@ export const NetflixProvider: React.FC<{ children: React.ReactNode }> = ({ child
         if (existingKey && existingKey !== canonicalKey) {
           delete next[existingKey];
           if (activeUser?.username && syncToCloud) {
-            fetch('/api/user/progress', {
-              method: 'DELETE',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ key: existingKey }),
-              keepalive: true,
-            }).catch(() => {});
+            directRemoveUserWatchProgress(activeUser.username, existingKey);
           }
         }
         if (rawKey && rawKey !== canonicalKey && next[rawKey]) {
@@ -1212,16 +1187,9 @@ export const NetflixProvider: React.FC<{ children: React.ReactNode }> = ({ child
           // ignore
         }
 
-        // Sync to cloud Firebase in background ONLY when syncToCloud is true (pause, exit, switch ep, or safety heartbeat)
+        // Sync directly to cloud Firebase (Bypasses Vercel Serverless Function completely)
         if (activeUser?.username && syncToCloud) {
-          try {
-            fetch('/api/user/progress', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ key: canonicalKey, progress: progressItem }),
-              keepalive: true,
-            }).catch(() => {});
-          } catch {}
+          directSaveUserWatchProgress(activeUser.username, canonicalKey, progressItem);
         }
 
         return next;
@@ -1259,11 +1227,7 @@ export const NetflixProvider: React.FC<{ children: React.ReactNode }> = ({ child
 
       if (activeUser?.username) {
         keysToDelete.forEach((k) => {
-          fetch('/api/user/progress', {
-            method: 'DELETE',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ key: k }),
-          }).catch(() => {});
+          directRemoveUserWatchProgress(activeUser.username, k);
         });
       }
 
